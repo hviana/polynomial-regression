@@ -1,5 +1,5 @@
 {
   "name": "@hviana/polynomial-regression",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "exports": "./mod.ts"
 }
