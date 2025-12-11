@@ -1,2773 +1,2276 @@
+/**
+ * MultivariatePolynomialRegression Library
+ *
+ * High-performance TypeScript library for multivariate polynomial regression
+ * with incremental online learning, Adam optimizer, and z-score normalization.
+ *
+ * @module MultivariatePolynomialRegression
+ */
+
 // ============================================================================
 // INTERFACES AND TYPES
 // ============================================================================
 
 /**
- * Configuration options for the MultivariatePolynomialRegression model.
- * All parameters have sensible defaults and validation ranges.
- *
- * @interface IConfiguration
+ * Configuration options for the regression model
  */
-interface IConfiguration {
-  /** Polynomial degree for feature expansion (default: 2, minimum: 1) */
-  polynomialDegree: number;
-  /** Whether to normalize input features (default: true) */
-  enableNormalization: boolean;
-  /** Normalization method to use (default: 'min-max') */
-  normalizationMethod: "none" | "min-max" | "z-score";
-  /** Initial learning rate for SGD (default: 0.01, range: (0, 1]) */
-  learningRate: number;
-  /** Learning rate decay factor per sample (default: 0.999, range: (0, 1]) */
-  learningRateDecay: number;
-  /** Momentum coefficient for velocity updates (default: 0.9, range: [0, 1)) */
-  momentum: number;
-  /** L2 regularization coefficient (default: 1e-6) */
-  regularization: number;
-  /** Maximum absolute gradient value for clipping (default: 1.0, range: (0, ∞)) */
-  gradientClipValue: number;
-  /** Confidence level for prediction intervals (default: 0.95, range: (0, 1)) */
-  confidenceLevel: number;
-  /** Mini-batch size for SGD updates (default: 1, minimum: 1) */
-  batchSize: number;
+export interface MultivariatePolynomialRegressionConfig {
+  /** Polynomial degree for feature expansion (1-10, default: 2) */
+  polynomialDegree?: number;
+  /** Base learning rate for Adam optimizer (default: 0.001) */
+  learningRate?: number;
+  /** Number of warmup steps for learning rate schedule (default: 100) */
+  warmupSteps?: number;
+  /** Total steps for cosine decay schedule (default: 10000) */
+  totalSteps?: number;
+  /** Adam β₁ parameter for first moment estimate (default: 0.9) */
+  beta1?: number;
+  /** Adam β₂ parameter for second moment estimate (default: 0.999) */
+  beta2?: number;
+  /** Numerical stability constant (default: 1e-8) */
+  epsilon?: number;
+  /** L2 regularization strength λ (default: 1e-4) */
+  regularizationStrength?: number;
+  /** Mini-batch size for batch training (default: 32) */
+  batchSize?: number;
+  /** Convergence threshold for early stopping (default: 1e-6) */
+  convergenceThreshold?: number;
+  /** Z-score threshold for outlier detection (default: 3.0) */
+  outlierThreshold?: number;
+  /** ADWIN delta parameter for drift detection (default: 0.002) */
+  adwinDelta?: number;
 }
 
 /**
- * Represents a single prediction with confidence bounds.
- * All arrays have length equal to output dimension.
- *
- * @interface SinglePrediction
+ * Input data for fitting operations
  */
-interface SinglePrediction {
-  /** Predicted values for each output dimension */
+export interface FitInput {
+  /** Input coordinates: array of samples, each sample is array of features */
+  xCoordinates: number[][];
+  /** Output coordinates: array of samples, each sample is array of outputs */
+  yCoordinates: number[][];
+}
+
+/**
+ * Result from online fitting operation
+ */
+export interface FitResult {
+  /** Current loss value (MSE) */
+  loss: number;
+  /** L2 norm of the gradient */
+  gradientNorm: number;
+  /** Current effective learning rate after warmup/decay */
+  effectiveLearningRate: number;
+  /** Whether any sample was detected as an outlier */
+  isOutlier: boolean;
+  /** Whether the model has converged */
+  converged: boolean;
+  /** Total samples processed so far */
+  sampleIndex: number;
+  /** Whether concept drift was detected */
+  driftDetected: boolean;
+}
+
+/**
+ * Input for batch fitting
+ */
+export interface BatchFitInput extends FitInput {
+  /** Number of training epochs (default: 100) */
+  epochs?: number;
+}
+
+/**
+ * Result from batch fitting operation
+ */
+export interface BatchFitResult {
+  /** Final loss after training */
+  finalLoss: number;
+  /** History of losses per epoch */
+  lossHistory: number[];
+  /** Whether training converged */
+  converged: boolean;
+  /** Number of epochs completed */
+  epochsCompleted: number;
+  /** Total samples processed */
+  totalSamplesProcessed: number;
+}
+
+/**
+ * Single prediction with uncertainty estimates
+ */
+export interface SinglePrediction {
+  /** Predicted output values */
   predicted: number[];
-  /** Lower bounds of confidence interval */
+  /** Lower confidence bound (95%) */
   lowerBound: number[];
-  /** Upper bounds of confidence interval */
+  /** Upper confidence bound (95%) */
   upperBound: number[];
-  /** Standard errors for each output dimension */
+  /** Standard error for each output dimension */
   standardError: number[];
 }
 
 /**
- * Complete result from a prediction operation.
- * Contains predictions, model metrics, and status information.
- *
- * @interface PredictionResult
+ * Result from prediction operation
  */
-interface PredictionResult {
-  /** Array of predictions, one per requested point */
+export interface PredictionResult {
+  /** Array of predictions */
   predictions: SinglePrediction[];
-  /** Confidence level used for interval calculation */
-  confidenceLevel: number;
-  /** Current R-squared (coefficient of determination) */
-  rSquared: number;
-  /** Current RMSE (root mean squared error) */
-  rmse: number;
-  /** Total number of training samples seen */
+  /** Model accuracy metric: 1/(1 + L̄) */
+  accuracy: number;
+  /** Number of samples used for training */
   sampleCount: number;
-  /** Whether the model has sufficient data for reliable predictions */
+  /** Whether the model is ready for predictions */
   isModelReady: boolean;
 }
 
 /**
- * Summary of current model state and statistics.
- *
- * @interface ModelSummary
+ * Weight information from the model
  */
-interface ModelSummary {
-  /** Whether the model has been initialized with data */
+export interface WeightInfo {
+  /** Current weight matrix W[outputDim][featureCount] */
+  weights: number[][];
+  /** First moment estimates m[outputDim][featureCount] */
+  firstMoment: number[][];
+  /** Second moment estimates v[outputDim][featureCount] */
+  secondMoment: number[][];
+  /** Number of weight updates performed */
+  updateCount: number;
+}
+
+/**
+ * Normalization statistics from Welford's algorithm
+ */
+export interface NormalizationStats {
+  /** Running mean of inputs */
+  inputMean: number[];
+  /** Running standard deviation of inputs */
+  inputStd: number[];
+  /** Running mean of outputs */
+  outputMean: number[];
+  /** Running standard deviation of outputs */
+  outputStd: number[];
+  /** Number of samples seen */
+  count: number;
+}
+
+/**
+ * Overall model summary
+ */
+export interface ModelSummary {
+  /** Whether the model has been initialized */
   isInitialized: boolean;
-  /** Number of input features */
+  /** Input dimension (number of features) */
   inputDimension: number;
-  /** Number of output targets */
+  /** Output dimension */
   outputDimension: number;
-  /** Polynomial degree used for feature expansion */
+  /** Polynomial degree used */
   polynomialDegree: number;
-  /** Total number of polynomial features (including bias) */
+  /** Number of polynomial features C(n+d,d) */
   polynomialFeatureCount: number;
-  /** Total number of training samples processed */
+  /** Number of samples processed */
   sampleCount: number;
-  /** Current R-squared value */
-  rSquared: number;
-  /** Current RMSE value */
-  rmse: number;
-  /** Whether normalization is enabled */
-  normalizationEnabled: boolean;
-  /** Current normalization method */
-  normalizationMethod: string;
+  /** Current accuracy metric */
+  accuracy: number;
+  /** Whether model has converged */
+  converged: boolean;
+  /** Current effective learning rate */
+  effectiveLearningRate: number;
+  /** Number of drift events detected */
+  driftCount: number;
 }
 
+// ============================================================================
+// INTERNAL INTERFACES
+// ============================================================================
+
 /**
- * Statistics used for input normalization.
- * All arrays have length equal to input dimension.
- *
- * @interface NormalizationStats
+ * Internal state for Welford's online statistics
+ * Tracks running mean and M₂ for variance computation
  */
-interface NormalizationStats {
-  /** Minimum values observed for each input feature */
-  min: number[];
-  /** Maximum values observed for each input feature */
-  max: number[];
-  /** Running mean for each input feature */
-  mean: number[];
-  /** Running standard deviation for each input feature */
-  std: number[];
-  /** Total number of samples used to compute statistics */
+interface WelfordState {
   count: number;
-}
-
-/**
- * Interface for matrix/vector operations.
- * Provides efficient in-place operations on typed arrays.
- *
- * @interface IMatrixOperations
- */
-interface IMatrixOperations {
-  /** Compute dot product of two vectors */
-  dotProduct(a: Float64Array, b: Float64Array): number;
-  /** Multiply vector by scalar in-place */
-  scalarMultiplyInPlace(arr: Float64Array, scalar: number): void;
-  /** Add source to target in-place */
-  addInPlace(target: Float64Array, source: Float64Array): void;
-  /** Subtract source from target in-place */
-  subtractInPlace(target: Float64Array, source: Float64Array): void;
-  /** Clip values to range in-place */
-  clipInPlace(arr: Float64Array, min: number, max: number): void;
-  /** Copy source array contents to target */
-  copyTo(source: Float64Array, target: Float64Array): void;
-  /** Get array from pool or create new one */
-  acquireArray(size: number): Float64Array;
-  /** Return array to pool for reuse */
-  releaseArray(arr: Float64Array): void;
-}
-
-/**
- * Interface for normalization strategies.
- * Implements Strategy pattern for different normalization methods.
- *
- * @interface INormalizationStrategy
- */
-interface INormalizationStrategy {
-  /**
-   * Normalize a single value
-   * @param value - Raw value to normalize
-   * @param index - Feature index
-   * @param stats - Current normalization statistics
-   * @returns Normalized value
-   */
-  normalize(
-    value: number,
-    index: number,
-    stats: INormalizationStatsInternal,
-  ): number;
-
-  /**
-   * Denormalize a single value back to original scale
-   * @param value - Normalized value
-   * @param index - Feature index
-   * @param stats - Current normalization statistics
-   * @returns Denormalized value
-   */
-  denormalize(
-    value: number,
-    index: number,
-    stats: INormalizationStatsInternal,
-  ): number;
-}
-
-/**
- * Internal interface for normalization statistics storage.
- * Uses typed arrays for memory efficiency.
- *
- * @interface INormalizationStatsInternal
- */
-interface INormalizationStatsInternal {
-  /** Minimum values per dimension */
-  min: Float64Array;
-  /** Maximum values per dimension */
-  max: Float64Array;
-  /** Running mean per dimension */
   mean: Float64Array;
-  /** M2 accumulator for Welford's algorithm */
   m2: Float64Array;
-  /** Standard deviation per dimension */
-  std: Float64Array;
-  /** Sample count */
+}
+
+/**
+ * ADWIN bucket for adaptive windowing drift detection
+ */
+interface ADWINBucket {
+  total: number;
+  variance: number;
   count: number;
 }
 
-/**
- * Interface for the normalizer component.
- *
- * @interface INormalizer
- */
-interface INormalizer {
-  initialize(dimension: number): void;
-  updateStatistics(x: Float64Array): void;
-  normalizeInPlace(x: Float64Array, output: Float64Array): void;
-  getStats(): NormalizationStats;
-  isEnabled(): boolean;
-  reset(): void;
-}
-
-/**
- * Interface for polynomial feature generation.
- *
- * @interface IPolynomialFeatureGenerator
- */
-interface IPolynomialFeatureGenerator {
-  initialize(inputDimension: number): void;
-  generateFeaturesInPlace(
-    normalizedInput: Float64Array,
-    output: Float64Array,
-  ): void;
-  getFeatureCount(): number;
-  getInputDimension(): number;
-  getDegree(): number;
-}
-
-/**
- * Interface for weight management.
- *
- * @interface IWeightManager
- */
-interface IWeightManager {
-  initialize(featureCount: number, outputDimension: number): void;
-  getWeight(outputIndex: number, featureIndex: number): number;
-  setWeight(outputIndex: number, featureIndex: number, value: number): void;
-  getWeightsForOutput(outputIndex: number, buffer: Float64Array): void;
-  updateWeight(outputIndex: number, featureIndex: number, delta: number): void;
-  getWeights(): number[][];
-  isInitialized(): boolean;
-  reset(): void;
-}
-
-/**
- * Interface for gradient computation and momentum.
- *
- * @interface IGradientManager
- */
-interface IGradientManager {
-  initialize(featureCount: number, outputDimension: number): void;
-  computeGradient(
-    features: Float64Array,
-    error: number,
-    weights: Float64Array,
-    regularization: number,
-    outputIndex: number,
-  ): void;
-  updateVelocityAndGetDelta(
-    learningRate: number,
-    outputIndex: number,
-  ): Float64Array;
-  reset(): void;
-}
-
-/**
- * Interface for prediction computation.
- *
- * @interface IPredictionEngine
- */
-interface IPredictionEngine {
-  initialize(featureCount: number, outputDimension: number): void;
-  predict(
-    features: Float64Array,
-    weightManager: IWeightManager,
-    output: Float64Array,
-  ): void;
-  getCriticalValue(sampleCount: number, confidenceLevel: number): number;
-  calculateStandardError(
-    features: Float64Array,
-    residualVariance: number,
-    sampleCount: number,
-  ): number;
-  reset(): void;
-}
-
-/**
- * Interface for statistics tracking.
- *
- * @interface IStatisticsTracker
- */
-interface IStatisticsTracker {
-  initialize(outputDimension: number): void;
-  update(actual: Float64Array, predicted: Float64Array): void;
-  getRSquared(): number;
-  getRMSE(): number;
-  getResidualVariance(numParameters: number): number;
-  getSampleCount(): number;
-  reset(): void;
-}
-
 // ============================================================================
-// MATRIX OPERATIONS CLASS
+// OBJECT POOL FOR MEMORY REUSE
 // ============================================================================
 
 /**
- * Efficient matrix and vector operations using typed arrays.
- * Implements object pooling to minimize garbage collection.
- * All operations are optimized for CPU cache efficiency.
- *
- * @class MatrixOperations
- * @implements {IMatrixOperations}
- *
- * @example
- * const matOps = new MatrixOperations();
- * const a = new Float64Array([1, 2, 3]);
- * const b = new Float64Array([4, 5, 6]);
- * const dot = matOps.dotProduct(a, b); // Returns 32
+ * Object pool for Float64Array instances
+ * Minimizes garbage collection pressure by reusing arrays
  */
-class MatrixOperations implements IMatrixOperations {
-  /** Object pool for array reuse, keyed by size */
-  private readonly arrayPool: Map<number, Float64Array[]>;
-  /** Maximum pool size per array length */
-  private readonly maxPoolSize: number;
+class Float64ArrayPool {
+  private readonly pools: Map<number, Float64Array[]> = new Map();
+  private static readonly MAX_POOL_SIZE = 64;
 
   /**
-   * Creates a new MatrixOperations instance.
-   *
-   * @param maxPoolSize - Maximum number of arrays to keep per size (default: 20)
-   */
-  constructor(maxPoolSize: number = 20) {
-    this.arrayPool = new Map();
-    this.maxPoolSize = maxPoolSize;
-  }
-
-  /**
-   * Acquire a Float64Array from the pool or create a new one.
-   * Arrays from pool are zeroed before return.
-   *
+   * Acquires a Float64Array of the specified size
    * @param size - Required array length
-   * @returns Float64Array of requested size
-   *
-   * Time complexity: O(n) for zeroing, O(1) amortized allocation
-   * Space complexity: O(1) when reusing, O(n) for new allocation
+   * @returns Float64Array (reused or newly allocated)
    */
-  acquireArray(size: number): Float64Array {
-    const pool = this.arrayPool.get(size);
+  acquire(size: number): Float64Array {
+    const pool = this.pools.get(size);
     if (pool !== undefined && pool.length > 0) {
-      const arr = pool.pop()!;
-      // Zero out the array before returning
-      const len = arr.length;
-      for (let i = 0; i < len; i++) {
-        arr[i] = 0;
-      }
-      return arr;
+      return pool.pop()!;
     }
     return new Float64Array(size);
   }
 
   /**
-   * Return a Float64Array to the pool for later reuse.
-   * Arrays beyond pool capacity are discarded for GC.
-   *
-   * @param arr - Array to return to pool
-   *
-   * Time complexity: O(1)
-   * Space complexity: O(1)
+   * Releases a Float64Array back to the pool
+   * @param arr - Array to release
    */
-  releaseArray(arr: Float64Array): void {
+  release(arr: Float64Array): void {
     const size = arr.length;
-    let pool = this.arrayPool.get(size);
+    let pool = this.pools.get(size);
     if (pool === undefined) {
       pool = [];
-      this.arrayPool.set(size, pool);
+      this.pools.set(size, pool);
     }
-    if (pool.length < this.maxPoolSize) {
+    if (pool.length < Float64ArrayPool.MAX_POOL_SIZE) {
+      // Zero out for security and fresh state
+      for (let i = 0; i < size; i++) {
+        arr[i] = 0;
+      }
       pool.push(arr);
     }
-    // Otherwise let it be garbage collected
   }
 
   /**
-   * Compute the dot product of two vectors.
-   * Uses loop unrolling for better performance.
+   * Clears all pooled arrays
+   */
+  clear(): void {
+    this.pools.clear();
+  }
+}
+
+// ============================================================================
+// MAIN CLASS
+// ============================================================================
+
+/**
+ * MultivariatePolynomialRegression
+ *
+ * High-performance multivariate polynomial regression with:
+ * - Incremental online learning via Adam optimizer
+ * - Z-score normalization using Welford's algorithm
+ * - L2 regularization for weight decay
+ * - Outlier detection and downweighting
+ * - ADWIN-based concept drift detection
+ * - Cosine warmup learning rate schedule
+ *
+ * Mathematical Background:
+ * - Polynomial features: φ(x) = all monomials of degree ≤ d
+ * - Feature count: C(n+d, d) where n = input dimension
+ * - Model: ŷ = W·φ(x) where W ∈ ℝ^(m×k), m = output dim, k = feature count
+ *
+ * @example
+ * ```typescript
+ * const model = new MultivariatePolynomialRegression({ polynomialDegree: 2 });
+ *
+ * // Online learning
+ * const result = model.fitOnline({
+ *   xCoordinates: [[1, 2], [3, 4]],
+ *   yCoordinates: [[5], [6]]
+ * });
+ *
+ * // Batch learning
+ * const batchResult = model.fitBatch({
+ *   xCoordinates: data.x,
+ *   yCoordinates: data.y,
+ *   epochs: 100
+ * });
+ *
+ * // Prediction
+ * const predictions = model.predict(10);
+ * ```
+ */
+export class MultivariatePolynomialRegression {
+  // =========================================================================
+  // CONFIGURATION (readonly after construction)
+  // =========================================================================
+
+  private readonly _polynomialDegree: number;
+  private readonly _learningRate: number;
+  private readonly _warmupSteps: number;
+  private readonly _totalSteps: number;
+  private readonly _beta1: number;
+  private readonly _beta2: number;
+  private readonly _epsilon: number;
+  private readonly _regularizationStrength: number;
+  private readonly _batchSize: number;
+  private readonly _convergenceThreshold: number;
+  private readonly _outlierThreshold: number;
+  private readonly _adwinDelta: number;
+
+  // =========================================================================
+  // MODEL DIMENSIONS (lazy initialized)
+  // =========================================================================
+
+  private _inputDimension: number = 0;
+  private _outputDimension: number = 0;
+  private _featureCount: number = 0;
+  private _isInitialized: boolean = false;
+
+  // =========================================================================
+  // WEIGHTS AND ADAM STATE (Float64Arrays for performance)
+  // =========================================================================
+
+  /** Weight matrix W, flattened: [outputDim * featureCount] */
+  private _weights: Float64Array | null = null;
+  /** Adam first moment m */
+  private _firstMoment: Float64Array | null = null;
+  /** Adam second moment v */
+  private _secondMoment: Float64Array | null = null;
+
+  // =========================================================================
+  // NORMALIZATION STATE (Welford's algorithm)
+  // =========================================================================
+
+  private _inputStats: WelfordState | null = null;
+  private _outputStats: WelfordState | null = null;
+  private _residualStats: WelfordState | null = null;
+
+  // =========================================================================
+  // TRAINING STATE
+  // =========================================================================
+
+  private _updateCount: number = 0;
+  private _sampleCount: number = 0;
+  private _runningLossSum: number = 0;
+  private _runningLossCount: number = 0;
+  private _converged: boolean = false;
+  private _previousLoss: number = Infinity;
+  private _driftCount: number = 0;
+
+  // =========================================================================
+  // ADWIN DRIFT DETECTION STATE
+  // =========================================================================
+
+  private _adwinBuckets: ADWINBucket[] = [];
+  private _adwinTotal: number = 0;
+  private _adwinCount: number = 0;
+
+  // =========================================================================
+  // PREALLOCATED BUFFERS (hot path optimization)
+  // =========================================================================
+
+  private _featureBuffer: Float64Array | null = null;
+  private _gradientBuffer: Float64Array | null = null;
+  private _errorBuffer: Float64Array | null = null;
+  private _normalizedInputBuffer: Float64Array | null = null;
+  private _normalizedOutputBuffer: Float64Array | null = null;
+  private _predictionBuffer: Float64Array | null = null;
+  private _tempBuffer: Float64Array | null = null;
+
+  // =========================================================================
+  // POLYNOMIAL FEATURE CACHE
+  // =========================================================================
+
+  /** Cached exponent patterns for polynomial features */
+  private _exponentCache: Uint8Array[] | null = null;
+
+  // =========================================================================
+  // OBJECT POOL
+  // =========================================================================
+
+  private readonly _pool: Float64ArrayPool = new Float64ArrayPool();
+
+  // =========================================================================
+  // RECENT SAMPLES BUFFER (for prediction)
+  // =========================================================================
+
+  private _recentX: Float64Array[] = [];
+  private _recentY: Float64Array[] = [];
+  private _recentIndex: number = 0;
+  private readonly _maxRecentSamples: number = 128;
+
+  // =========================================================================
+  // RANDOM NUMBER GENERATOR STATE (Box-Muller)
+  // =========================================================================
+
+  private _hasSpare: boolean = false;
+  private _spare: number = 0;
+
+  /**
+   * Creates a new MultivariatePolynomialRegression instance
    *
-   * Formula: result = Σ(aᵢ × bᵢ) for i = 0 to n-1
-   *
-   * @param a - First vector
-   * @param b - Second vector (must be same length as a)
-   * @returns Scalar dot product
-   *
-   * Time complexity: O(n)
-   * Space complexity: O(1)
+   * @param config - Configuration options
+   * @throws Error if polynomialDegree is outside valid range [1, 10]
    *
    * @example
-   * const a = new Float64Array([1, 2, 3]);
-   * const b = new Float64Array([4, 5, 6]);
-   * const result = matOps.dotProduct(a, b); // 1*4 + 2*5 + 3*6 = 32
+   * ```typescript
+   * const model = new MultivariatePolynomialRegression({
+   *   polynomialDegree: 3,
+   *   learningRate: 0.01,
+   *   regularizationStrength: 0.001
+   * });
+   * ```
    */
-  dotProduct(a: Float64Array, b: Float64Array): number {
-    let result = 0;
-    const len = a.length;
-
-    // Process 4 elements at a time for better CPU pipelining
-    const unrolledLen = len - (len % 4);
-    let i = 0;
-
-    for (; i < unrolledLen; i += 4) {
-      result += a[i] * b[i] +
-        a[i + 1] * b[i + 1] +
-        a[i + 2] * b[i + 2] +
-        a[i + 3] * b[i + 3];
+  constructor(config: MultivariatePolynomialRegressionConfig = {}) {
+    // Validate and set polynomial degree
+    const degree = config.polynomialDegree ?? 2;
+    if (degree < 1 || degree > 10 || !Number.isInteger(degree)) {
+      throw new Error(
+        `polynomialDegree must be an integer between 1 and 10, got: ${degree}`,
+      );
     }
+    this._polynomialDegree = degree;
 
-    // Handle remaining elements
-    for (; i < len; i++) {
-      result += a[i] * b[i];
-    }
+    // Set learning parameters with defaults
+    this._learningRate = this._validatePositive(
+      config.learningRate ?? 0.001,
+      "learningRate",
+    );
+    this._warmupSteps = this._validateNonNegativeInt(
+      config.warmupSteps ?? 100,
+      "warmupSteps",
+    );
+    this._totalSteps = this._validatePositiveInt(
+      config.totalSteps ?? 10000,
+      "totalSteps",
+    );
 
-    return result;
+    // Adam parameters
+    this._beta1 = this._validateRange(config.beta1 ?? 0.9, 0, 1, "beta1");
+    this._beta2 = this._validateRange(config.beta2 ?? 0.999, 0, 1, "beta2");
+    this._epsilon = this._validatePositive(config.epsilon ?? 1e-8, "epsilon");
+
+    // Regularization and batch settings
+    this._regularizationStrength = this._validateNonNegative(
+      config.regularizationStrength ?? 1e-4,
+      "regularizationStrength",
+    );
+    this._batchSize = this._validatePositiveInt(
+      config.batchSize ?? 32,
+      "batchSize",
+    );
+
+    // Convergence and outlier detection
+    this._convergenceThreshold = this._validatePositive(
+      config.convergenceThreshold ?? 1e-6,
+      "convergenceThreshold",
+    );
+    this._outlierThreshold = this._validatePositive(
+      config.outlierThreshold ?? 3.0,
+      "outlierThreshold",
+    );
+
+    // ADWIN drift detection
+    this._adwinDelta = this._validateRange(
+      config.adwinDelta ?? 0.002,
+      0,
+      1,
+      "adwinDelta",
+    );
   }
 
-  /**
-   * Multiply all elements of an array by a scalar in-place.
-   *
-   * Formula: arrᵢ = arrᵢ × scalar for all i
-   *
-   * @param arr - Array to modify
-   * @param scalar - Multiplication factor
-   *
-   * Time complexity: O(n)
-   * Space complexity: O(1)
-   */
-  scalarMultiplyInPlace(arr: Float64Array, scalar: number): void {
-    const len = arr.length;
-    for (let i = 0; i < len; i++) {
-      arr[i] *= scalar;
+  // =========================================================================
+  // VALIDATION HELPERS
+  // =========================================================================
+
+  private _validatePositive(value: number, name: string): number {
+    if (typeof value !== "number" || !isFinite(value) || value <= 0) {
+      throw new Error(
+        `${name} must be a positive finite number, got: ${value}`,
+      );
     }
-  }
-
-  /**
-   * Add source vector to target vector element-wise in-place.
-   *
-   * Formula: targetᵢ = targetᵢ + sourceᵢ for all i
-   *
-   * @param target - Target array (will be modified)
-   * @param source - Source array to add
-   *
-   * Time complexity: O(n)
-   * Space complexity: O(1)
-   */
-  addInPlace(target: Float64Array, source: Float64Array): void {
-    const len = target.length;
-    for (let i = 0; i < len; i++) {
-      target[i] += source[i];
-    }
-  }
-
-  /**
-   * Subtract source vector from target vector element-wise in-place.
-   *
-   * Formula: targetᵢ = targetᵢ - sourceᵢ for all i
-   *
-   * @param target - Target array (will be modified)
-   * @param source - Source array to subtract
-   *
-   * Time complexity: O(n)
-   * Space complexity: O(1)
-   */
-  subtractInPlace(target: Float64Array, source: Float64Array): void {
-    const len = target.length;
-    for (let i = 0; i < len; i++) {
-      target[i] -= source[i];
-    }
-  }
-
-  /**
-   * Clip all values in array to specified range in-place.
-   *
-   * Formula: arrᵢ = max(min, min(max, arrᵢ)) for all i
-   *
-   * @param arr - Array to clip
-   * @param min - Minimum allowed value
-   * @param max - Maximum allowed value
-   *
-   * Time complexity: O(n)
-   * Space complexity: O(1)
-   */
-  clipInPlace(arr: Float64Array, min: number, max: number): void {
-    const len = arr.length;
-    for (let i = 0; i < len; i++) {
-      const val = arr[i];
-      if (val < min) {
-        arr[i] = min;
-      } else if (val > max) {
-        arr[i] = max;
-      }
-    }
-  }
-
-  /**
-   * Copy contents from source array to target array.
-   *
-   * @param source - Source array to copy from
-   * @param target - Target array to copy to
-   *
-   * Time complexity: O(n)
-   * Space complexity: O(1)
-   */
-  copyTo(source: Float64Array, target: Float64Array): void {
-    const len = source.length;
-    for (let i = 0; i < len; i++) {
-      target[i] = source[i];
-    }
-  }
-
-  /**
-   * Fill array with zeros in-place.
-   *
-   * @param arr - Array to zero
-   *
-   * Time complexity: O(n)
-   * Space complexity: O(1)
-   */
-  zeroFill(arr: Float64Array): void {
-    const len = arr.length;
-    for (let i = 0; i < len; i++) {
-      arr[i] = 0;
-    }
-  }
-
-  /**
-   * Clear the array pool to free memory.
-   */
-  clearPool(): void {
-    this.arrayPool.clear();
-  }
-}
-
-// ============================================================================
-// NORMALIZATION STRATEGIES
-// ============================================================================
-
-/**
- * No-op normalization strategy that passes values through unchanged.
- *
- * @class NoNormalizationStrategy
- * @implements {INormalizationStrategy}
- */
-class NoNormalizationStrategy implements INormalizationStrategy {
-  /**
-   * Returns value unchanged.
-   *
-   * @param value - Input value
-   * @returns Same value
-   *
-   * Time complexity: O(1)
-   * Space complexity: O(1)
-   */
-  normalize(value: number): number {
     return value;
   }
 
-  /**
-   * Returns value unchanged.
-   *
-   * @param value - Input value
-   * @returns Same value
-   *
-   * Time complexity: O(1)
-   * Space complexity: O(1)
-   */
-  denormalize(value: number): number {
+  private _validateNonNegative(value: number, name: string): number {
+    if (typeof value !== "number" || !isFinite(value) || value < 0) {
+      throw new Error(
+        `${name} must be a non-negative finite number, got: ${value}`,
+      );
+    }
     return value;
   }
-}
 
-/**
- * Min-Max normalization strategy.
- * Scales values to [0, 1] range based on observed min and max.
- *
- * Formula: normalized = (x - min) / (max - min)
- *
- * @class MinMaxNormalizationStrategy
- * @implements {INormalizationStrategy}
- *
- * @example
- * // If min=0, max=100, then value 50 normalizes to 0.5
- */
-class MinMaxNormalizationStrategy implements INormalizationStrategy {
-  /** Minimum range to prevent division by zero */
-  private readonly minRange: number = 1e-10;
+  private _validatePositiveInt(value: number, name: string): number {
+    if (!Number.isInteger(value) || value <= 0) {
+      throw new Error(`${name} must be a positive integer, got: ${value}`);
+    }
+    return value;
+  }
 
-  /**
-   * Normalize value using min-max scaling.
-   *
-   * Formula: (x - min) / (max - min)
-   * Output range: [0, 1]
-   *
-   * @param value - Raw value to normalize
-   * @param index - Feature index for statistics lookup
-   * @param stats - Current normalization statistics
-   * @returns Normalized value in [0, 1]
-   *
-   * Time complexity: O(1)
-   * Space complexity: O(1)
-   */
-  normalize(
+  private _validateNonNegativeInt(value: number, name: string): number {
+    if (!Number.isInteger(value) || value < 0) {
+      throw new Error(`${name} must be a non-negative integer, got: ${value}`);
+    }
+    return value;
+  }
+
+  private _validateRange(
     value: number,
-    index: number,
-    stats: INormalizationStatsInternal,
+    min: number,
+    max: number,
+    name: string,
   ): number {
-    const range = stats.max[index] - stats.min[index];
-    if (range < this.minRange) {
-      return 0.5; // Return midpoint when range is effectively zero
+    if (
+      typeof value !== "number" || !isFinite(value) || value < min ||
+      value > max
+    ) {
+      throw new Error(
+        `${name} must be between ${min} and ${max}, got: ${value}`,
+      );
     }
-    return (value - stats.min[index]) / range;
+    return value;
   }
 
-  /**
-   * Denormalize value back to original scale.
-   *
-   * Formula: x = normalized × (max - min) + min
-   *
-   * @param value - Normalized value
-   * @param index - Feature index for statistics lookup
-   * @param stats - Current normalization statistics
-   * @returns Value in original scale
-   *
-   * Time complexity: O(1)
-   * Space complexity: O(1)
-   */
-  denormalize(
-    value: number,
-    index: number,
-    stats: INormalizationStatsInternal,
-  ): number {
-    const range = stats.max[index] - stats.min[index];
-    return value * range + stats.min[index];
-  }
-}
-
-/**
- * Z-Score (standard score) normalization strategy.
- * Centers data around mean with unit standard deviation.
- *
- * Formula: normalized = (x - mean) / std
- *
- * @class ZScoreNormalizationStrategy
- * @implements {INormalizationStrategy}
- *
- * @example
- * // If mean=50, std=10, then value 60 normalizes to 1.0
- */
-class ZScoreNormalizationStrategy implements INormalizationStrategy {
-  /** Minimum std to prevent division by zero */
-  private readonly minStd: number = 1e-10;
+  // =========================================================================
+  // PUBLIC API
+  // =========================================================================
 
   /**
-   * Normalize value using z-score standardization.
+   * Performs incremental online learning on the provided samples
    *
-   * Formula: (x - μ) / σ
-   * Output: values centered at 0 with std ≈ 1
+   * Uses Adam optimizer with:
+   * - Cosine warmup learning rate schedule
+   * - Welford's algorithm for z-score normalization
+   * - L2 regularization
+   * - Outlier downweighting based on z-score of residuals
+   * - ADWIN-based concept drift detection
    *
-   * @param value - Raw value to normalize
-   * @param index - Feature index for statistics lookup
-   * @param stats - Current normalization statistics
-   * @returns Z-score normalized value
+   * Mathematical formulation:
+   * ```
+   * Normalize:    x̃ = (x - μ)/(σ + ε)
+   * Features:     φ(x) = [1, x₁, x₂, ..., x₁², x₁x₂, ...]  (monomials ≤ degree d)
+   * Forward:      ŷ = W·φ(x)
+   * Loss:         L = (1/2n)Σ‖y - ŷ‖² + (λ/2)‖W‖²
+   * Gradient:     g = -(1/n)Σ(e ⊗ φ) + λW
+   * Adam:         m = β₁m + (1-β₁)g
+   *               v = β₂v + (1-β₂)g²
+   * Update:       W -= η·(m/(1-β₁ᵗ))/(√(v/(1-β₂ᵗ)) + ε)
+   * ```
    *
-   * Time complexity: O(1)
-   * Space complexity: O(1)
+   * @param input - Input coordinates and output coordinates
+   * @returns FitResult with loss, gradient norm, and training state
+   *
+   * @example
+   * ```typescript
+   * const result = model.fitOnline({
+   *   xCoordinates: [[1, 2], [3, 4]],
+   *   yCoordinates: [[5], [6]]
+   * });
+   * console.log(`Loss: ${result.loss}, Converged: ${result.converged}`);
+   * ```
    */
-  normalize(
-    value: number,
-    index: number,
-    stats: INormalizationStatsInternal,
-  ): number {
-    if (stats.std[index] < this.minStd) {
-      return 0; // Return zero when std is effectively zero
+  fitOnline(input: FitInput): FitResult {
+    const { xCoordinates, yCoordinates } = input;
+
+    // Input validation
+    if (!Array.isArray(xCoordinates) || !Array.isArray(yCoordinates)) {
+      throw new Error("xCoordinates and yCoordinates must be arrays");
     }
-    return (value - stats.mean[index]) / stats.std[index];
-  }
-
-  /**
-   * Denormalize value back to original scale.
-   *
-   * Formula: x = normalized × σ + μ
-   *
-   * @param value - Normalized value
-   * @param index - Feature index for statistics lookup
-   * @param stats - Current normalization statistics
-   * @returns Value in original scale
-   *
-   * Time complexity: O(1)
-   * Space complexity: O(1)
-   */
-  denormalize(
-    value: number,
-    index: number,
-    stats: INormalizationStatsInternal,
-  ): number {
-    return value * stats.std[index] + stats.mean[index];
-  }
-}
-
-// ============================================================================
-// NORMALIZER CLASS
-// ============================================================================
-
-/**
- * Handles incremental normalization of input data.
- * Uses Welford's online algorithm for numerical stability.
- * Does not store individual data points - computes statistics incrementally.
- *
- * @class Normalizer
- * @implements {INormalizer}
- *
- * @example
- * const normalizer = new Normalizer(true, 'min-max');
- * normalizer.initialize(3); // 3 input features
- *
- * const input = new Float64Array([1.0, 2.0, 3.0]);
- * normalizer.updateStatistics(input);
- *
- * const output = new Float64Array(3);
- * normalizer.normalizeInPlace(input, output);
- */
-class Normalizer implements INormalizer {
-  /** Internal statistics storage */
-  private stats: INormalizationStatsInternal | null = null;
-  /** Current normalization strategy */
-  private readonly strategy: INormalizationStrategy;
-  /** Whether normalization is enabled */
-  private readonly enabled: boolean;
-  /** Input dimension */
-  private dimension: number = 0;
-  /** Value clamp bounds for normalized output */
-  private readonly clampMin: number = -10;
-  private readonly clampMax: number = 10;
-
-  /**
-   * Creates a new Normalizer instance.
-   *
-   * @param enabled - Whether normalization is enabled
-   * @param method - Normalization method ('none', 'min-max', or 'z-score')
-   */
-  constructor(enabled: boolean, method: "none" | "min-max" | "z-score") {
-    this.enabled = enabled;
-    this.strategy = this.createStrategy(method);
-  }
-
-  /**
-   * Factory method to create normalization strategy.
-   *
-   * @param method - Strategy name
-   * @returns Appropriate strategy instance
-   */
-  private createStrategy(method: string): INormalizationStrategy {
-    switch (method) {
-      case "z-score":
-        return new ZScoreNormalizationStrategy();
-      case "min-max":
-        return new MinMaxNormalizationStrategy();
-      default:
-        return new NoNormalizationStrategy();
+    if (xCoordinates.length === 0 || yCoordinates.length === 0) {
+      throw new Error("Input arrays must not be empty");
     }
-  }
-
-  /**
-   * Initialize normalizer for given input dimension.
-   * Allocates statistics arrays and sets initial values.
-   *
-   * @param dimension - Number of input features
-   *
-   * Time complexity: O(dimension)
-   * Space complexity: O(dimension)
-   */
-  initialize(dimension: number): void {
-    this.dimension = dimension;
-
-    const min = new Float64Array(dimension);
-    const max = new Float64Array(dimension);
-    const mean = new Float64Array(dimension);
-    const m2 = new Float64Array(dimension);
-    const std = new Float64Array(dimension);
-
-    // Initialize min to +Infinity, max to -Infinity
-    for (let i = 0; i < dimension; i++) {
-      min[i] = Number.MAX_VALUE;
-      max[i] = -Number.MAX_VALUE;
-      std[i] = 1; // Default std to prevent division by zero
+    if (xCoordinates.length !== yCoordinates.length) {
+      throw new Error(
+        `xCoordinates length (${xCoordinates.length}) must equal yCoordinates length (${yCoordinates.length})`,
+      );
     }
 
-    this.stats = { min, max, mean, m2, std, count: 0 };
-  }
+    const n = xCoordinates.length;
 
-  /**
-   * Update running statistics with new data point.
-   * Uses Welford's online algorithm for numerically stable mean/variance.
-   *
-   * Welford's Algorithm:
-   * - M₁ = x₁
-   * - Mₖ = M_{k-1} + (xₖ - M_{k-1}) / k
-   * - S₁ = 0
-   * - Sₖ = S_{k-1} + (xₖ - M_{k-1}) × (xₖ - Mₖ)
-   * - variance = Sₖ / (k - 1)
-   *
-   * @param x - Input vector to incorporate
-   *
-   * Time complexity: O(dimension)
-   * Space complexity: O(1)
-   */
-  updateStatistics(x: Float64Array): void {
-    if (this.stats === null || !this.enabled) {
-      return;
+    // Validate first sample dimensions
+    if (!Array.isArray(xCoordinates[0]) || xCoordinates[0].length === 0) {
+      throw new Error("Each x sample must be a non-empty array");
+    }
+    if (!Array.isArray(yCoordinates[0]) || yCoordinates[0].length === 0) {
+      throw new Error("Each y sample must be a non-empty array");
     }
 
-    this.stats.count++;
-    const n = this.stats.count;
+    // Lazy initialization on first data
+    if (!this._isInitialized) {
+      this._initializeModel(xCoordinates[0].length, yCoordinates[0].length);
+    }
 
-    for (let i = 0; i < this.dimension; i++) {
-      const value = x[i];
+    // Validate dimension consistency
+    const expectedInputDim = this._inputDimension;
+    const expectedOutputDim = this._outputDimension;
 
-      // Update min/max
-      if (value < this.stats.min[i]) {
-        this.stats.min[i] = value;
+    let totalLoss = 0;
+    let totalGradientNorm = 0;
+    let anyOutlier = false;
+    let driftDetected = false;
+
+    // Process each sample incrementally
+    for (let i = 0; i < n; i++) {
+      const x = xCoordinates[i];
+      const y = yCoordinates[i];
+
+      // Dimension check (fast path: only check first dimension)
+      if (x.length !== expectedInputDim) {
+        throw new Error(
+          `Sample ${i}: x dimension (${x.length}) doesn't match expected (${expectedInputDim})`,
+        );
       }
-      if (value > this.stats.max[i]) {
-        this.stats.max[i] = value;
+      if (y.length !== expectedOutputDim) {
+        throw new Error(
+          `Sample ${i}: y dimension (${y.length}) doesn't match expected (${expectedOutputDim})`,
+        );
       }
 
-      // Welford's online algorithm for mean and variance
-      const delta = value - this.stats.mean[i];
-      this.stats.mean[i] += delta / n;
-      const delta2 = value - this.stats.mean[i];
-      this.stats.m2[i] += delta * delta2;
+      // Update normalization statistics using Welford's algorithm
+      // Welford: δ = x - μ, μ += δ/n, M₂ += δ(x - μ)
+      this._updateWelfordStats(this._inputStats!, x);
+      this._updateWelfordStats(this._outputStats!, y);
 
-      // Update standard deviation
-      if (n > 1) {
-        this.stats.std[i] = Math.sqrt(this.stats.m2[i] / (n - 1));
-      }
-    }
-  }
+      // Normalize input and output: x̃ = (x - μ)/(σ + ε)
+      this._normalizeVector(x, this._inputStats!, this._normalizedInputBuffer!);
+      this._normalizeVector(
+        y,
+        this._outputStats!,
+        this._normalizedOutputBuffer!,
+      );
 
-  /**
-   * Normalize input vector in-place to output buffer.
-   * Applies clamping to prevent extreme outliers.
-   *
-   * @param x - Input vector
-   * @param output - Output buffer for normalized values
-   *
-   * Time complexity: O(dimension)
-   * Space complexity: O(1)
-   */
-  normalizeInPlace(x: Float64Array, output: Float64Array): void {
-    if (!this.enabled || this.stats === null) {
-      // Copy directly if normalization disabled
-      for (let i = 0; i < this.dimension; i++) {
-        output[i] = x[i];
-      }
-      return;
-    }
+      // Generate polynomial features φ(x)
+      // φ(x) = [1, x₁, x₂, ..., x₁², x₁x₂, ...] (graded lex order)
+      this._generatePolynomialFeatures(
+        this._normalizedInputBuffer!,
+        this._featureBuffer!,
+      );
 
-    for (let i = 0; i < this.dimension; i++) {
-      let normalized = this.strategy.normalize(x[i], i, this.stats);
+      // Forward pass: ŷ = W·φ(x)
+      this._forward(this._featureBuffer!, this._predictionBuffer!);
 
-      // Clamp to prevent extreme outliers from destabilizing training
-      if (normalized < this.clampMin) {
-        normalized = this.clampMin;
-      } else if (normalized > this.clampMax) {
-        normalized = this.clampMax;
+      // Compute error: e = y - ŷ
+      this._computeError(
+        this._normalizedOutputBuffer!,
+        this._predictionBuffer!,
+        this._errorBuffer!,
+      );
+
+      // Compute loss: L = (1/2)‖e‖²
+      const sampleLoss = this._computeMSELoss(this._errorBuffer!);
+
+      // Check for outlier based on residual z-score
+      // r = (y - ŷ)/σ_residual; outlier if |r| > threshold
+      const isCurrentOutlier = this._detectOutlier(this._errorBuffer!);
+      if (isCurrentOutlier) {
+        anyOutlier = true;
       }
 
-      output[i] = normalized;
-    }
-  }
+      // Outlier downweighting factor: 0.1 for outliers, 1.0 otherwise
+      const sampleWeight = isCurrentOutlier ? 0.1 : 1.0;
 
-  /**
-   * Get current normalization statistics as plain objects.
-   *
-   * @returns NormalizationStats object
-   *
-   * Time complexity: O(dimension)
-   * Space complexity: O(dimension)
-   */
-  getStats(): NormalizationStats {
-    if (this.stats === null) {
-      return { min: [], max: [], mean: [], std: [], count: 0 };
+      // Compute gradient: g = -(e ⊗ φ) + λW
+      const gradNorm = this._computeGradient(
+        this._errorBuffer!,
+        this._featureBuffer!,
+        sampleWeight,
+      );
+      totalGradientNorm += gradNorm;
+
+      // Get effective learning rate (warmup + cosine decay)
+      // Warmup: η_t = η * t / warmup_steps
+      // Cosine: η_t = η * 0.5 * (1 + cos(π * progress))
+      this._updateCount++;
+      const effectiveLR = this._getEffectiveLearningRate();
+
+      // Adam update
+      // m = β₁m + (1-β₁)g, v = β₂v + (1-β₂)g²
+      // W -= η·m̂/(√v̂ + ε)
+      this._adamUpdate(effectiveLR);
+
+      // Update running loss for accuracy tracking
+      this._runningLossSum += sampleLoss;
+      this._runningLossCount++;
+      totalLoss += sampleLoss;
+
+      // Update residual statistics for confidence intervals
+      this._updateWelfordStatsTyped(this._residualStats!, this._errorBuffer!);
+
+      // ADWIN drift detection
+      // Detect: |μ₀ - μ₁| ≥ √((2/m)·ln(2/δ))
+      if (this._detectDrift(sampleLoss)) {
+        driftDetected = true;
+        this._handleDrift();
+      }
+
+      // Store recent sample for prediction
+      this._storeRecentSample(x, y);
+
+      this._sampleCount++;
     }
+
+    // Check convergence based on loss change
+    const avgLoss = totalLoss / n;
+    const lossDelta = Math.abs(this._previousLoss - avgLoss);
+    if (
+      lossDelta < this._convergenceThreshold &&
+      this._sampleCount > this._warmupSteps
+    ) {
+      this._converged = true;
+    }
+    this._previousLoss = avgLoss;
+
     return {
-      min: Array.from(this.stats.min),
-      max: Array.from(this.stats.max),
-      mean: Array.from(this.stats.mean),
-      std: Array.from(this.stats.std),
-      count: this.stats.count,
+      loss: avgLoss,
+      gradientNorm: totalGradientNorm / n,
+      effectiveLearningRate: this._getEffectiveLearningRate(),
+      isOutlier: anyOutlier,
+      converged: this._converged,
+      sampleIndex: this._sampleCount,
+      driftDetected,
     };
   }
 
   /**
-   * Check if normalization is enabled.
+   * Performs batch training with mini-batch gradient descent
    *
-   * @returns true if normalization is enabled
+   * Features:
+   * - Mini-batch gradient descent with configurable batch size
+   * - Fisher-Yates shuffling between epochs
+   * - Early stopping based on convergence threshold
+   * - Gradient accumulation for memory efficiency
+   *
+   * @param input - Training data and optional number of epochs
+   * @returns BatchFitResult with final loss and training history
+   *
+   * @example
+   * ```typescript
+   * const result = model.fitBatch({
+   *   xCoordinates: trainingX,
+   *   yCoordinates: trainingY,
+   *   epochs: 200
+   * });
+   * console.log(`Final loss: ${result.finalLoss}, Epochs: ${result.epochsCompleted}`);
+   * ```
    */
-  isEnabled(): boolean {
-    return this.enabled;
+  fitBatch(input: BatchFitInput): BatchFitResult {
+    const { xCoordinates, yCoordinates, epochs = 100 } = input;
+
+    // Input validation
+    if (!Array.isArray(xCoordinates) || !Array.isArray(yCoordinates)) {
+      throw new Error("xCoordinates and yCoordinates must be arrays");
+    }
+    if (xCoordinates.length === 0 || yCoordinates.length === 0) {
+      throw new Error("Input arrays must not be empty");
+    }
+    if (xCoordinates.length !== yCoordinates.length) {
+      throw new Error(
+        `xCoordinates length (${xCoordinates.length}) must equal yCoordinates length (${yCoordinates.length})`,
+      );
+    }
+
+    const n = xCoordinates.length;
+
+    // Lazy initialization
+    if (!this._isInitialized) {
+      this._initializeModel(xCoordinates[0].length, yCoordinates[0].length);
+    }
+
+    // First pass: compute normalization statistics for all data
+    for (let i = 0; i < n; i++) {
+      this._updateWelfordStats(this._inputStats!, xCoordinates[i]);
+      this._updateWelfordStats(this._outputStats!, yCoordinates[i]);
+    }
+
+    const lossHistory: number[] = [];
+    let epochsCompleted = 0;
+    let totalSamplesProcessed = 0;
+    let converged = false;
+
+    // Create index array for shuffling (Uint32Array for memory efficiency)
+    const indices = new Uint32Array(n);
+    for (let i = 0; i < n; i++) {
+      indices[i] = i;
+    }
+
+    // Batch gradient accumulator (reused across batches)
+    const batchGradient = this._pool.acquire(
+      this._outputDimension * this._featureCount,
+    );
+
+    // Patience counter for early stopping
+    let patienceCounter = 0;
+    const patience = 10;
+    let bestLoss = Infinity;
+
+    for (let epoch = 0; epoch < epochs; epoch++) {
+      // Shuffle indices using Fisher-Yates
+      this._shuffleIndices(indices);
+
+      let epochLoss = 0;
+
+      // Process mini-batches
+      for (let batchStart = 0; batchStart < n; batchStart += this._batchSize) {
+        const batchEnd = Math.min(batchStart + this._batchSize, n);
+        const currentBatchSize = batchEnd - batchStart;
+
+        // Reset batch gradient accumulator
+        for (let j = 0; j < batchGradient.length; j++) {
+          batchGradient[j] = 0;
+        }
+
+        let batchLoss = 0;
+
+        // Accumulate gradients over mini-batch
+        for (let b = batchStart; b < batchEnd; b++) {
+          const idx = indices[b];
+          const x = xCoordinates[idx];
+          const y = yCoordinates[idx];
+
+          // Normalize
+          this._normalizeVector(
+            x,
+            this._inputStats!,
+            this._normalizedInputBuffer!,
+          );
+          this._normalizeVector(
+            y,
+            this._outputStats!,
+            this._normalizedOutputBuffer!,
+          );
+
+          // Generate features
+          this._generatePolynomialFeatures(
+            this._normalizedInputBuffer!,
+            this._featureBuffer!,
+          );
+
+          // Forward pass
+          this._forward(this._featureBuffer!, this._predictionBuffer!);
+
+          // Compute error
+          this._computeError(
+            this._normalizedOutputBuffer!,
+            this._predictionBuffer!,
+            this._errorBuffer!,
+          );
+
+          // Accumulate loss
+          batchLoss += this._computeMSELoss(this._errorBuffer!);
+
+          // Accumulate gradient: g += -(e ⊗ φ)
+          this._accumulateGradient(
+            this._errorBuffer!,
+            this._featureBuffer!,
+            batchGradient,
+          );
+
+          totalSamplesProcessed++;
+        }
+
+        // Average gradient and add L2 regularization: g = g/batch_size + λW
+        const scale = 1.0 / currentBatchSize;
+        const weights = this._weights!;
+        const lambda = this._regularizationStrength;
+
+        for (let j = 0; j < batchGradient.length; j++) {
+          batchGradient[j] = batchGradient[j] * scale + lambda * weights[j];
+        }
+
+        // Get effective learning rate
+        this._updateCount++;
+        const effectiveLR = this._getEffectiveLearningRate();
+
+        // Adam update with accumulated gradient
+        this._adamUpdateWithGradient(effectiveLR, batchGradient);
+
+        epochLoss += batchLoss;
+      }
+
+      const avgEpochLoss = epochLoss / n;
+      lossHistory.push(avgEpochLoss);
+      epochsCompleted++;
+
+      // Update running loss tracking
+      this._runningLossSum += epochLoss;
+      this._runningLossCount += n;
+
+      // Check for early stopping convergence
+      if (avgEpochLoss < bestLoss - this._convergenceThreshold) {
+        bestLoss = avgEpochLoss;
+        patienceCounter = 0;
+      } else {
+        patienceCounter++;
+      }
+
+      if (patienceCounter >= patience) {
+        converged = true;
+        this._converged = true;
+        break;
+      }
+
+      // Also check direct convergence
+      if (lossHistory.length >= 2) {
+        const prevLoss = lossHistory[lossHistory.length - 2];
+        if (Math.abs(prevLoss - avgEpochLoss) < this._convergenceThreshold) {
+          converged = true;
+          this._converged = true;
+          break;
+        }
+      }
+    }
+
+    // Release pooled gradient buffer
+    this._pool.release(batchGradient);
+
+    // Store samples for prediction (up to max recent)
+    const samplesToStore = Math.min(n, this._maxRecentSamples);
+    for (let i = 0; i < samplesToStore; i++) {
+      this._storeRecentSample(xCoordinates[i], yCoordinates[i]);
+    }
+    this._sampleCount += n;
+
+    return {
+      finalLoss: lossHistory.length > 0
+        ? lossHistory[lossHistory.length - 1]
+        : 0,
+      lossHistory,
+      converged,
+      epochsCompleted,
+      totalSamplesProcessed,
+    };
   }
 
   /**
-   * Reset statistics to initial state.
+   * Generates predictions for future steps
    *
-   * Time complexity: O(dimension)
-   * Space complexity: O(1)
+   * Uses the trained model to predict outputs with uncertainty estimates.
+   * Confidence intervals are computed using residual standard error with
+   * 95% coverage (±1.96 standard errors).
+   *
+   * @param futureSteps - Number of predictions to generate
+   * @returns PredictionResult with predictions and model state
+   *
+   * @example
+   * ```typescript
+   * const predictions = model.predict(5);
+   * predictions.predictions.forEach((p, i) => {
+   *   console.log(`Step ${i}: ${p.predicted} ± ${p.standardError}`);
+   * });
+   * ```
+   */
+  predict(futureSteps: number): PredictionResult {
+    // Validate input
+    if (!Number.isInteger(futureSteps) || futureSteps < 0) {
+      throw new Error(
+        `futureSteps must be a non-negative integer, got: ${futureSteps}`,
+      );
+    }
+
+    // Check if model is ready
+    if (!this._isInitialized || this._sampleCount === 0) {
+      return {
+        predictions: [],
+        accuracy: 0,
+        sampleCount: 0,
+        isModelReady: false,
+      };
+    }
+
+    const predictions: SinglePrediction[] = [];
+    const accuracy = this._getAccuracy();
+
+    // Get residual standard deviation for confidence intervals
+    const residualStd = this._getResidualStd();
+
+    // Generate predictions
+    for (let step = 0; step < futureSteps; step++) {
+      // Get input for prediction
+      const inputX = this._getInputForPrediction(step);
+
+      if (inputX === null) {
+        break;
+      }
+
+      // Normalize input: x̃ = (x - μ)/(σ + ε)
+      this._normalizeTypedArray(
+        inputX,
+        this._inputStats!,
+        this._normalizedInputBuffer!,
+      );
+
+      // Generate polynomial features φ(x)
+      this._generatePolynomialFeatures(
+        this._normalizedInputBuffer!,
+        this._featureBuffer!,
+      );
+
+      // Forward pass: ŷ = W·φ(x)
+      this._forward(this._featureBuffer!, this._predictionBuffer!);
+
+      // Denormalize output and compute confidence intervals
+      const predicted: number[] = new Array(this._outputDimension);
+      const lowerBound: number[] = new Array(this._outputDimension);
+      const upperBound: number[] = new Array(this._outputDimension);
+      const standardError: number[] = new Array(this._outputDimension);
+
+      const outputStats = this._outputStats!;
+      const predBuffer = this._predictionBuffer!;
+
+      for (let j = 0; j < this._outputDimension; j++) {
+        // Compute output standard deviation from Welford state
+        const outputCount = outputStats.count;
+        let outputStd: number;
+        if (outputCount <= 1) {
+          outputStd = 1.0;
+        } else {
+          outputStd = Math.sqrt(outputStats.m2[j] / (outputCount - 1));
+          if (outputStd < this._epsilon) {
+            outputStd = 1.0;
+          }
+        }
+
+        // Denormalize: y = ŷ·σ + μ
+        const normalizedPred = predBuffer[j];
+        predicted[j] = normalizedPred * outputStd + outputStats.mean[j];
+
+        // Standard error increases with prediction step (uncertainty grows)
+        // SE = σ_residual * σ_output * √(1 + step * 0.1)
+        const se = residualStd[j] * outputStd * Math.sqrt(1.0 + step * 0.1);
+        standardError[j] = se;
+
+        // 95% confidence interval: ±1.96 standard errors
+        const margin = 1.96 * se;
+        lowerBound[j] = predicted[j] - margin;
+        upperBound[j] = predicted[j] + margin;
+      }
+
+      predictions.push({
+        predicted,
+        lowerBound,
+        upperBound,
+        standardError,
+      });
+    }
+
+    return {
+      predictions,
+      accuracy,
+      sampleCount: this._sampleCount,
+      isModelReady: true,
+    };
+  }
+
+  /**
+   * Returns a summary of the model state
+   *
+   * @returns ModelSummary with dimensions, training state, and accuracy
+   *
+   * @example
+   * ```typescript
+   * const summary = model.getModelSummary();
+   * console.log(`Features: ${summary.polynomialFeatureCount}, Accuracy: ${summary.accuracy}`);
+   * ```
+   */
+  getModelSummary(): ModelSummary {
+    return {
+      isInitialized: this._isInitialized,
+      inputDimension: this._inputDimension,
+      outputDimension: this._outputDimension,
+      polynomialDegree: this._polynomialDegree,
+      polynomialFeatureCount: this._featureCount,
+      sampleCount: this._sampleCount,
+      accuracy: this._getAccuracy(),
+      converged: this._converged,
+      effectiveLearningRate: this._isInitialized
+        ? this._getEffectiveLearningRate()
+        : this._learningRate,
+      driftCount: this._driftCount,
+    };
+  }
+
+  /**
+   * Returns the current weight information
+   *
+   * @returns WeightInfo with weights, Adam moments, and update count
+   *
+   * @example
+   * ```typescript
+   * const weights = model.getWeights();
+   * console.log(`Updates: ${weights.updateCount}`);
+   * ```
+   */
+  getWeights(): WeightInfo {
+    if (!this._isInitialized || this._weights === null) {
+      return {
+        weights: [],
+        firstMoment: [],
+        secondMoment: [],
+        updateCount: 0,
+      };
+    }
+
+    // Convert flat arrays to 2D for API compatibility
+    const weights: number[][] = [];
+    const firstMoment: number[][] = [];
+    const secondMoment: number[][] = [];
+
+    for (let i = 0; i < this._outputDimension; i++) {
+      const wRow: number[] = new Array(this._featureCount);
+      const mRow: number[] = new Array(this._featureCount);
+      const vRow: number[] = new Array(this._featureCount);
+
+      const offset = i * this._featureCount;
+      for (let j = 0; j < this._featureCount; j++) {
+        wRow[j] = this._weights![offset + j];
+        mRow[j] = this._firstMoment![offset + j];
+        vRow[j] = this._secondMoment![offset + j];
+      }
+
+      weights.push(wRow);
+      firstMoment.push(mRow);
+      secondMoment.push(vRow);
+    }
+
+    return {
+      weights,
+      firstMoment,
+      secondMoment,
+      updateCount: this._updateCount,
+    };
+  }
+
+  /**
+   * Returns the normalization statistics
+   *
+   * @returns NormalizationStats with mean, std, and count for inputs/outputs
+   *
+   * @example
+   * ```typescript
+   * const stats = model.getNormalizationStats();
+   * console.log(`Input means: ${stats.inputMean}`);
+   * ```
+   */
+  getNormalizationStats(): NormalizationStats {
+    if (
+      !this._isInitialized || this._inputStats === null ||
+      this._outputStats === null
+    ) {
+      return {
+        inputMean: [],
+        inputStd: [],
+        outputMean: [],
+        outputStd: [],
+        count: 0,
+      };
+    }
+
+    // Convert typed arrays to regular arrays and compute std from M2
+    const inputMean: number[] = new Array(this._inputDimension);
+    const inputStd: number[] = new Array(this._inputDimension);
+    const outputMean: number[] = new Array(this._outputDimension);
+    const outputStd: number[] = new Array(this._outputDimension);
+
+    const inputCount = this._inputStats.count;
+    const outputCount = this._outputStats.count;
+
+    for (let i = 0; i < this._inputDimension; i++) {
+      inputMean[i] = this._inputStats.mean[i];
+      if (inputCount <= 1) {
+        inputStd[i] = 0;
+      } else {
+        inputStd[i] = Math.sqrt(this._inputStats.m2[i] / (inputCount - 1));
+      }
+    }
+
+    for (let i = 0; i < this._outputDimension; i++) {
+      outputMean[i] = this._outputStats.mean[i];
+      if (outputCount <= 1) {
+        outputStd[i] = 0;
+      } else {
+        outputStd[i] = Math.sqrt(this._outputStats.m2[i] / (outputCount - 1));
+      }
+    }
+
+    return {
+      inputMean,
+      inputStd,
+      outputMean,
+      outputStd,
+      count: inputCount,
+    };
+  }
+
+  /**
+   * Resets the model to its initial state
+   *
+   * Clears all weights, statistics, and training state.
+   * Configuration is preserved.
+   *
+   * @example
+   * ```typescript
+   * model.reset();
+   * // Model is now ready for fresh training
+   * ```
    */
   reset(): void {
-    if (this.dimension > 0) {
-      this.initialize(this.dimension);
-    }
+    // Reset dimensions
+    this._inputDimension = 0;
+    this._outputDimension = 0;
+    this._featureCount = 0;
+    this._isInitialized = false;
+
+    // Reset weights and Adam state
+    this._weights = null;
+    this._firstMoment = null;
+    this._secondMoment = null;
+
+    // Reset normalization state
+    this._inputStats = null;
+    this._outputStats = null;
+    this._residualStats = null;
+
+    // Reset training state
+    this._updateCount = 0;
+    this._sampleCount = 0;
+    this._runningLossSum = 0;
+    this._runningLossCount = 0;
+    this._converged = false;
+    this._previousLoss = Infinity;
+    this._driftCount = 0;
+
+    // Reset ADWIN state
+    this._adwinBuckets = [];
+    this._adwinTotal = 0;
+    this._adwinCount = 0;
+
+    // Reset buffers
+    this._featureBuffer = null;
+    this._gradientBuffer = null;
+    this._errorBuffer = null;
+    this._normalizedInputBuffer = null;
+    this._normalizedOutputBuffer = null;
+    this._predictionBuffer = null;
+    this._tempBuffer = null;
+
+    // Reset polynomial cache
+    this._exponentCache = null;
+
+    // Clear object pool
+    this._pool.clear();
+
+    // Reset recent samples
+    this._recentX = [];
+    this._recentY = [];
+    this._recentIndex = 0;
+
+    // Reset RNG state
+    this._hasSpare = false;
+    this._spare = 0;
   }
-}
 
-// ============================================================================
-// POLYNOMIAL FEATURE GENERATOR
-// ============================================================================
-
-/**
- * Generates polynomial features from input vectors.
- * Precomputes exponent combinations for efficiency.
- *
- * For degree d and input [x₁, x₂], generates all monomials of total degree ≤ d:
- * degree=2: [1, x₁, x₂, x₁², x₁x₂, x₂²]
- *
- * Feature count formula: C(n+d, d) = (n+d)! / (d! × n!)
- *
- * @class PolynomialFeatureGenerator
- * @implements {IPolynomialFeatureGenerator}
- *
- * @example
- * const generator = new PolynomialFeatureGenerator(2);
- * generator.initialize(2); // 2 input features
- *
- * const input = new Float64Array([2.0, 3.0]);
- * const features = new Float64Array(generator.getFeatureCount());
- * generator.generateFeaturesInPlace(input, features);
- * // features = [1, 2, 3, 4, 6, 9] = [1, x₁, x₂, x₁², x₁x₂, x₂²]
- */
-class PolynomialFeatureGenerator implements IPolynomialFeatureGenerator {
-  /** Polynomial degree */
-  private readonly degree: number;
-  /** Input dimension */
-  private inputDimension: number = 0;
-  /** Total number of polynomial features */
-  private featureCount: number = 0;
-  /** Precomputed exponent matrix [feature_index][input_index] = exponent */
-  private exponentMatrix: Uint8Array[] | null = null;
+  // =========================================================================
+  // PRIVATE METHODS - INITIALIZATION
+  // =========================================================================
 
   /**
-   * Creates a new PolynomialFeatureGenerator.
+   * Initializes the model with given dimensions
    *
-   * @param degree - Maximum polynomial degree (≥ 1)
-   * @throws Error if degree < 1
+   * Computes polynomial feature count using binomial coefficient:
+   * C(n+d, d) = (n+d)! / (n! * d!)
+   *
+   * This gives the count of all monomials with total degree ≤ d in n variables.
+   *
+   * @param inputDim - Number of input features
+   * @param outputDim - Number of output dimensions
    */
-  constructor(degree: number) {
-    if (degree < 1) {
-      throw new Error("Polynomial degree must be at least 1");
+  private _initializeModel(inputDim: number, outputDim: number): void {
+    this._inputDimension = inputDim;
+    this._outputDimension = outputDim;
+
+    // Compute number of polynomial features: C(n+d, d)
+    // This counts all monomials x₁^e₁ · x₂^e₂ · ... · x_n^e_n where Σe_i ≤ d
+    this._featureCount = this._computeBinomial(
+      inputDim + this._polynomialDegree,
+      this._polynomialDegree,
+    );
+
+    const totalWeights = outputDim * this._featureCount;
+
+    // Initialize weights with Xavier/Glorot initialization
+    // σ = √(2 / (fan_in + fan_out)) for better gradient flow
+    this._weights = new Float64Array(totalWeights);
+    const scale = Math.sqrt(2.0 / (this._featureCount + outputDim));
+    for (let i = 0; i < totalWeights; i++) {
+      this._weights[i] = this._randomNormal() * scale;
     }
-    this.degree = degree;
+
+    // Initialize Adam moments to zero
+    this._firstMoment = new Float64Array(totalWeights);
+    this._secondMoment = new Float64Array(totalWeights);
+
+    // Initialize normalization statistics (Welford's algorithm)
+    this._inputStats = {
+      count: 0,
+      mean: new Float64Array(inputDim),
+      m2: new Float64Array(inputDim),
+    };
+
+    this._outputStats = {
+      count: 0,
+      mean: new Float64Array(outputDim),
+      m2: new Float64Array(outputDim),
+    };
+
+    this._residualStats = {
+      count: 0,
+      mean: new Float64Array(outputDim),
+      m2: new Float64Array(outputDim),
+    };
+
+    // Preallocate buffers for hot paths
+    this._featureBuffer = new Float64Array(this._featureCount);
+    this._gradientBuffer = new Float64Array(totalWeights);
+    this._errorBuffer = new Float64Array(outputDim);
+    this._normalizedInputBuffer = new Float64Array(inputDim);
+    this._normalizedOutputBuffer = new Float64Array(outputDim);
+    this._predictionBuffer = new Float64Array(outputDim);
+    this._tempBuffer = new Float64Array(
+      Math.max(inputDim, outputDim, this._featureCount),
+    );
+
+    // Generate polynomial exponent cache for efficient feature computation
+    this._generateExponentCache();
+
+    this._isInitialized = true;
   }
 
   /**
-   * Calculate number of polynomial features using combinatorics.
+   * Computes binomial coefficient C(n, k) iteratively
    *
-   * Formula: C(n+d, d) where n=inputDimension, d=degree
-   * This equals the number of monomials of total degree ≤ d in n variables.
+   * Formula: C(n,k) = n! / (k! * (n-k)!) = ∏(i=0 to k-1) (n-i)/(i+1)
    *
-   * @param inputDimension - Number of input features
-   * @returns Number of polynomial features
+   * Uses iterative multiplication to avoid overflow for large values.
    *
-   * Time complexity: O(degree)
-   * Space complexity: O(1)
+   * @param n - Total items
+   * @param k - Items to choose
+   * @returns Binomial coefficient
    */
-  private calculateFeatureCount(inputDimension: number): number {
-    // C(n+d, d) = (n+d)! / (d! × n!)
-    // Computed iteratively: C(n+d, d) = Π(n+i)/i for i=1 to d
+  private _computeBinomial(n: number, k: number): number {
+    if (k > n - k) {
+      k = n - k;
+    }
     let result = 1;
-    for (let i = 1; i <= this.degree; i++) {
-      result = (result * (inputDimension + i)) / i;
+    for (let i = 0; i < k; i++) {
+      result = (result * (n - i)) / (i + 1);
     }
     return Math.round(result);
   }
 
   /**
-   * Initialize generator for given input dimension.
-   * Precomputes all exponent combinations for fast feature generation.
+   * Generates exponent cache for polynomial features in graded lexicographic order
    *
-   * @param inputDimension - Number of input features
+   * Each entry is a Uint8Array of exponents [e₁, e₂, ..., e_n] where Σe_i ≤ d
+   * Graded lex order: first by total degree, then lexicographically
    *
-   * Time complexity: O(featureCount × inputDimension)
-   * Space complexity: O(featureCount × inputDimension)
+   * Example for n=2, d=2:
+   * [0,0], [1,0], [0,1], [2,0], [1,1], [0,2]
+   *  deg0   deg1   deg1   deg2   deg2   deg2
    */
-  initialize(inputDimension: number): void {
-    this.inputDimension = inputDimension;
-    this.featureCount = this.calculateFeatureCount(inputDimension);
+  private _generateExponentCache(): void {
+    this._exponentCache = [];
+    const n = this._inputDimension;
+    const d = this._polynomialDegree;
 
-    // Precompute all exponent combinations
-    this.exponentMatrix = [];
-    const currentExponents = new Uint8Array(inputDimension);
-    this.generateExponentCombinations(currentExponents, 0, this.degree);
+    // Stack-based iterative generation to avoid recursion overhead
+    const current = new Uint8Array(n);
+
+    // Degree 0: constant term [0, 0, ..., 0]
+    this._exponentCache.push(new Uint8Array(current));
+
+    // Generate monomials for each total degree from 1 to d
+    for (let totalDeg = 1; totalDeg <= d; totalDeg++) {
+      this._generateMonomialsOfDegree(n, totalDeg);
+    }
   }
 
   /**
-   * Recursively generate all exponent combinations.
-   * Uses DFS to enumerate all valid monomial combinations.
+   * Generates all monomials of exactly the given total degree
+   * Uses iterative approach with stack simulation
    *
-   * @param current - Current exponent array being built
-   * @param index - Current dimension index
-   * @param remaining - Remaining degree budget
+   * @param n - Number of variables
+   * @param degree - Exact total degree to generate
    */
-  private generateExponentCombinations(
-    current: Uint8Array,
-    index: number,
-    remaining: number,
-  ): void {
-    if (index === this.inputDimension) {
-      // Store a copy of the current exponent combination
-      const copy = new Uint8Array(this.inputDimension);
-      for (let i = 0; i < this.inputDimension; i++) {
-        copy[i] = current[i];
+  private _generateMonomialsOfDegree(n: number, degree: number): void {
+    // Stack-based implementation for efficiency
+    const stack: Array<
+      { pos: number; remaining: number; exponents: Uint8Array }
+    > = [];
+    stack.push({ pos: 0, remaining: degree, exponents: new Uint8Array(n) });
+
+    while (stack.length > 0) {
+      const { pos, remaining, exponents } = stack.pop()!;
+
+      if (pos === n - 1) {
+        // Last position: assign remaining degree
+        exponents[pos] = remaining;
+        this._exponentCache!.push(new Uint8Array(exponents));
+        exponents[pos] = 0;
+        continue;
       }
-      this.exponentMatrix!.push(copy);
+
+      // Try all possible exponents for current position (descending for graded lex)
+      for (let exp = remaining; exp >= 0; exp--) {
+        const newExponents = new Uint8Array(exponents);
+        newExponents[pos] = exp;
+        stack.push({
+          pos: pos + 1,
+          remaining: remaining - exp,
+          exponents: newExponents,
+        });
+      }
+    }
+  }
+
+  // =========================================================================
+  // PRIVATE METHODS - WELFORD'S ALGORITHM FOR ONLINE STATISTICS
+  // =========================================================================
+
+  /**
+   * Updates Welford's online statistics with a new sample
+   *
+   * Welford's algorithm for numerically stable running mean and variance:
+   * δ = x - μ
+   * μ += δ/n
+   * M₂ += δ(x - μ)
+   * σ² = M₂/(n-1)
+   *
+   * @param state - Welford state to update
+   * @param sample - New sample values (regular array)
+   */
+  private _updateWelfordStats(state: WelfordState, sample: number[]): void {
+    state.count++;
+    const n = state.count;
+    const mean = state.mean;
+    const m2 = state.m2;
+
+    // Unrolled loop for common small dimensions
+    const len = sample.length;
+    let i = 0;
+
+    // Process 4 elements at a time when possible
+    const len4 = len - (len % 4);
+    for (; i < len4; i += 4) {
+      const x0 = sample[i];
+      const x1 = sample[i + 1];
+      const x2 = sample[i + 2];
+      const x3 = sample[i + 3];
+
+      const delta0 = x0 - mean[i];
+      const delta1 = x1 - mean[i + 1];
+      const delta2 = x2 - mean[i + 2];
+      const delta3 = x3 - mean[i + 3];
+
+      mean[i] += delta0 / n;
+      mean[i + 1] += delta1 / n;
+      mean[i + 2] += delta2 / n;
+      mean[i + 3] += delta3 / n;
+
+      m2[i] += delta0 * (x0 - mean[i]);
+      m2[i + 1] += delta1 * (x1 - mean[i + 1]);
+      m2[i + 2] += delta2 * (x2 - mean[i + 2]);
+      m2[i + 3] += delta3 * (x3 - mean[i + 3]);
+    }
+
+    // Handle remaining elements
+    for (; i < len; i++) {
+      const x = sample[i];
+      const delta = x - mean[i];
+      mean[i] += delta / n;
+      m2[i] += delta * (x - mean[i]);
+    }
+  }
+
+  /**
+   * Updates Welford's statistics with a typed array sample
+   *
+   * @param state - Welford state to update
+   * @param sample - New sample values (Float64Array)
+   */
+  private _updateWelfordStatsTyped(
+    state: WelfordState,
+    sample: Float64Array,
+  ): void {
+    state.count++;
+    const n = state.count;
+    const mean = state.mean;
+    const m2 = state.m2;
+    const len = sample.length;
+
+    for (let i = 0; i < len; i++) {
+      const x = sample[i];
+      const delta = x - mean[i];
+      mean[i] += delta / n;
+      m2[i] += delta * (x - mean[i]);
+    }
+  }
+
+  // =========================================================================
+  // PRIVATE METHODS - NORMALIZATION
+  // =========================================================================
+
+  /**
+   * Normalizes a vector using z-score normalization
+   *
+   * Formula: x̃ = (x - μ)/(σ + ε)
+   *
+   * Uses sample standard deviation: σ = √(M₂/(n-1))
+   * Falls back to σ=1 when insufficient samples or near-zero variance.
+   *
+   * @param input - Input values (regular array)
+   * @param stats - Welford statistics for mean and variance
+   * @param output - Output buffer for normalized values
+   */
+  private _normalizeVector(
+    input: number[],
+    stats: WelfordState,
+    output: Float64Array,
+  ): void {
+    const n = stats.count;
+    const mean = stats.mean;
+    const m2 = stats.m2;
+    const eps = this._epsilon;
+    const len = input.length;
+
+    if (n <= 1) {
+      // Not enough samples: center only
+      for (let i = 0; i < len; i++) {
+        output[i] = input[i] - mean[i];
+      }
       return;
     }
 
-    // Try all possible exponents for this dimension
-    for (let exp = 0; exp <= remaining; exp++) {
-      current[index] = exp;
-      this.generateExponentCombinations(current, index + 1, remaining - exp);
+    const varianceDenom = n - 1;
+
+    for (let i = 0; i < len; i++) {
+      // σ = √(M₂/(n-1))
+      let std = Math.sqrt(m2[i] / varianceDenom);
+      if (std < eps) {
+        std = 1.0; // Avoid division by near-zero
+      }
+      output[i] = (input[i] - mean[i]) / (std + eps);
     }
-    current[index] = 0; // Reset for backtracking
   }
 
   /**
-   * Generate polynomial features from normalized input.
-   * Uses precomputed exponents for efficiency.
+   * Normalizes a typed array using z-score normalization
    *
-   * @param normalizedInput - Normalized input vector
+   * @param input - Input values (Float64Array)
+   * @param stats - Welford statistics
+   * @param output - Output buffer
+   */
+  private _normalizeTypedArray(
+    input: Float64Array,
+    stats: WelfordState,
+    output: Float64Array,
+  ): void {
+    const n = stats.count;
+    const mean = stats.mean;
+    const m2 = stats.m2;
+    const eps = this._epsilon;
+    const len = input.length;
+
+    if (n <= 1) {
+      for (let i = 0; i < len; i++) {
+        output[i] = input[i] - mean[i];
+      }
+      return;
+    }
+
+    const varianceDenom = n - 1;
+
+    for (let i = 0; i < len; i++) {
+      let std = Math.sqrt(m2[i] / varianceDenom);
+      if (std < eps) {
+        std = 1.0;
+      }
+      output[i] = (input[i] - mean[i]) / (std + eps);
+    }
+  }
+
+  // =========================================================================
+  // PRIVATE METHODS - POLYNOMIAL FEATURES
+  // =========================================================================
+
+  /**
+   * Generates polynomial features φ(x) for normalized input
+   *
+   * Computes all monomials of degree ≤ d:
+   * φ(x) = [1, x₁, x₂, ..., x₁², x₁x₂, ..., x_n^d]
+   *
+   * Each monomial x₁^e₁ · x₂^e₂ · ... · x_n^e_n where Σe_i ≤ d
+   *
+   * Uses cached exponents and optimized power computation for small exponents.
+   *
+   * @param input - Normalized input vector
    * @param output - Output buffer for polynomial features
-   *
-   * Time complexity: O(featureCount × inputDimension)
-   * Space complexity: O(1) - uses preallocated buffers
-   *
-   * @example
-   * // For input [x₁, x₂] with degree 2:
-   * // Output: [1, x₁, x₂, x₁², x₁x₂, x₂²]
    */
-  generateFeaturesInPlace(
-    normalizedInput: Float64Array,
+  private _generatePolynomialFeatures(
+    input: Float64Array,
     output: Float64Array,
   ): void {
-    if (this.exponentMatrix === null) {
-      return;
-    }
-
-    const numFeatures = this.exponentMatrix.length;
-    const numDims = this.inputDimension;
-
-    for (let f = 0; f < numFeatures; f++) {
-      const exponents = this.exponentMatrix[f];
-      let feature = 1.0;
-
-      // Compute x₁^e₁ × x₂^e₂ × ... × xₙ^eₙ
-      for (let d = 0; d < numDims; d++) {
-        const exp = exponents[d];
-        if (exp > 0) {
-          // Inline power computation (faster than Math.pow for small exponents)
-          const base = normalizedInput[d];
-          let power = 1.0;
-          for (let e = 0; e < exp; e++) {
-            power *= base;
-          }
-          feature *= power;
-        }
-      }
-
-      output[f] = feature;
-    }
-  }
-
-  /**
-   * Get the total number of polynomial features.
-   *
-   * @returns Feature count
-   */
-  getFeatureCount(): number {
-    return this.featureCount;
-  }
-
-  /**
-   * Get the input dimension.
-   *
-   * @returns Input dimension
-   */
-  getInputDimension(): number {
-    return this.inputDimension;
-  }
-
-  /**
-   * Get the polynomial degree.
-   *
-   * @returns Degree
-   */
-  getDegree(): number {
-    return this.degree;
-  }
-}
-
-// ============================================================================
-// WEIGHT MANAGER
-// ============================================================================
-
-/**
- * Manages model weights with efficient flat storage.
- * Weights stored as contiguous Float64Array for cache efficiency.
- *
- * Storage layout: [output₀_weights..., output₁_weights..., ...]
- *
- * @class WeightManager
- * @implements {IWeightManager}
- */
-class WeightManager implements IWeightManager {
-  /** Flat weight storage */
-  private weights: Float64Array | null = null;
-  /** Number of polynomial features */
-  private featureCount: number = 0;
-  /** Number of output dimensions */
-  private outputDimension: number = 0;
-  /** Initialization flag */
-  private initialized: boolean = false;
-
-  /**
-   * Initialize weights for given dimensions.
-   * Uses Xavier/Glorot initialization for better convergence.
-   *
-   * Xavier initialization: w ~ U(-√(6/(n_in+n_out)), √(6/(n_in+n_out)))
-   *
-   * @param featureCount - Number of polynomial features (inputs)
-   * @param outputDimension - Number of output targets
-   *
-   * Time complexity: O(featureCount × outputDimension)
-   * Space complexity: O(featureCount × outputDimension)
-   */
-  initialize(featureCount: number, outputDimension: number): void {
-    this.featureCount = featureCount;
-    this.outputDimension = outputDimension;
-
-    const totalSize = featureCount * outputDimension;
-    this.weights = new Float64Array(totalSize);
-
-    // Xavier/Glorot initialization for better gradient flow
-    const scale = Math.sqrt(6.0 / (featureCount + outputDimension));
-
-    for (let i = 0; i < totalSize; i++) {
-      // Uniform distribution in [-scale, scale]
-      this.weights[i] = (Math.random() * 2 - 1) * scale;
-    }
-
-    this.initialized = true;
-  }
-
-  /**
-   * Get weight at specific position.
-   *
-   * @param outputIndex - Output dimension index
-   * @param featureIndex - Feature index
-   * @returns Weight value
-   *
-   * Time complexity: O(1)
-   * Space complexity: O(1)
-   */
-  getWeight(outputIndex: number, featureIndex: number): number {
-    if (this.weights === null) {
-      return 0;
-    }
-    return this.weights[outputIndex * this.featureCount + featureIndex];
-  }
-
-  /**
-   * Set weight at specific position.
-   *
-   * @param outputIndex - Output dimension index
-   * @param featureIndex - Feature index
-   * @param value - New weight value
-   *
-   * Time complexity: O(1)
-   * Space complexity: O(1)
-   */
-  setWeight(outputIndex: number, featureIndex: number, value: number): void {
-    if (this.weights === null) {
-      return;
-    }
-    this.weights[outputIndex * this.featureCount + featureIndex] = value;
-  }
-
-  /**
-   * Copy weights for a specific output dimension to buffer.
-   *
-   * @param outputIndex - Output dimension index
-   * @param buffer - Destination buffer
-   *
-   * Time complexity: O(featureCount)
-   * Space complexity: O(1)
-   */
-  getWeightsForOutput(outputIndex: number, buffer: Float64Array): void {
-    if (this.weights === null) {
-      return;
-    }
-    const offset = outputIndex * this.featureCount;
-    for (let i = 0; i < this.featureCount; i++) {
-      buffer[i] = this.weights[offset + i];
-    }
-  }
-
-  /**
-   * Update weight by subtracting delta.
-   * w = w - delta
-   *
-   * @param outputIndex - Output dimension index
-   * @param featureIndex - Feature index
-   * @param delta - Value to subtract from weight
-   *
-   * Time complexity: O(1)
-   * Space complexity: O(1)
-   */
-  updateWeight(outputIndex: number, featureIndex: number, delta: number): void {
-    if (this.weights === null) {
-      return;
-    }
-    this.weights[outputIndex * this.featureCount + featureIndex] -= delta;
-  }
-
-  /**
-   * Get all weights as 2D array.
-   *
-   * @returns Weights array [outputDim][featureCount]
-   *
-   * Time complexity: O(outputDimension × featureCount)
-   * Space complexity: O(outputDimension × featureCount)
-   */
-  getWeights(): number[][] {
-    if (this.weights === null) {
-      return [];
-    }
-
-    const result: number[][] = [];
-    for (let o = 0; o < this.outputDimension; o++) {
-      const row: number[] = [];
-      const offset = o * this.featureCount;
-      for (let f = 0; f < this.featureCount; f++) {
-        row.push(this.weights[offset + f]);
-      }
-      result.push(row);
-    }
-    return result;
-  }
-
-  /**
-   * Check if weights have been initialized.
-   *
-   * @returns true if initialized
-   */
-  isInitialized(): boolean {
-    return this.initialized;
-  }
-
-  /**
-   * Get number of features.
-   *
-   * @returns Feature count
-   */
-  getFeatureCount(): number {
-    return this.featureCount;
-  }
-
-  /**
-   * Get output dimension.
-   *
-   * @returns Output dimension
-   */
-  getOutputDimension(): number {
-    return this.outputDimension;
-  }
-
-  /**
-   * Reset weights to uninitialized state.
-   *
-   * Time complexity: O(1)
-   * Space complexity: O(1)
-   */
-  reset(): void {
-    this.weights = null;
-    this.initialized = false;
-    this.featureCount = 0;
-    this.outputDimension = 0;
-  }
-}
-
-// ============================================================================
-// GRADIENT MANAGER
-// ============================================================================
-
-/**
- * Manages gradient computation and momentum updates for SGD.
- * Implements momentum-based gradient descent with gradient clipping.
- *
- * Momentum update formula:
- * v = μ × v + η × g
- * w = w - v
- *
- * @class GradientManager
- * @implements {IGradientManager}
- */
-class GradientManager implements IGradientManager {
-  /** Velocity storage for momentum */
-  private velocity: Float64Array | null = null;
-  /** Gradient buffer for current computation */
-  private gradient: Float64Array | null = null;
-  /** Number of polynomial features */
-  private featureCount: number = 0;
-  /** Number of output dimensions */
-  private outputDimension: number = 0;
-  /** Momentum coefficient */
-  private readonly momentum: number;
-  /** Gradient clipping threshold */
-  private readonly clipValue: number;
-
-  /**
-   * Creates a new GradientManager.
-   *
-   * @param momentum - Momentum coefficient [0, 1)
-   * @param clipValue - Maximum gradient magnitude
-   */
-  constructor(momentum: number, clipValue: number) {
-    this.momentum = momentum;
-    this.clipValue = clipValue;
-  }
-
-  /**
-   * Initialize gradient buffers.
-   *
-   * @param featureCount - Number of features
-   * @param outputDimension - Number of outputs
-   *
-   * Time complexity: O(featureCount × outputDimension)
-   * Space complexity: O(featureCount × outputDimension)
-   */
-  initialize(featureCount: number, outputDimension: number): void {
-    this.featureCount = featureCount;
-    this.outputDimension = outputDimension;
-
-    const totalSize = featureCount * outputDimension;
-    this.velocity = new Float64Array(totalSize);
-    this.gradient = new Float64Array(featureCount);
-  }
-
-  /**
-   * Compute gradient for a single output dimension.
-   * Applies L2 regularization and gradient clipping.
-   *
-   * Gradient formula:
-   * g = -error × features + λ × weights
-   *
-   * The negative error is used because we want to minimize loss:
-   * ∂L/∂w = -error × x + λw (for MSE loss with L2 regularization)
-   *
-   * @param features - Polynomial features (φ)
-   * @param error - Prediction error (y - ŷ)
-   * @param weights - Current weights for this output
-   * @param regularization - L2 regularization coefficient (λ)
-   * @param outputIndex - Output dimension index
-   *
-   * Time complexity: O(featureCount)
-   * Space complexity: O(1)
-   */
-  computeGradient(
-    features: Float64Array,
-    error: number,
-    weights: Float64Array,
-    regularization: number,
-    outputIndex: number,
-  ): void {
-    if (this.gradient === null) {
-      return;
-    }
-
-    const len = this.featureCount;
-    const negError = -error;
-    const clipMin = -this.clipValue;
-    const clipMax = this.clipValue;
-
-    for (let i = 0; i < len; i++) {
-      // g = -e×φ + λ×w
-      // Negative error because gradient of (y - ŷ)² w.r.t. w is -2(y-ŷ)×x
-      let grad = negError * features[i] + regularization * weights[i];
-
-      // Apply gradient clipping to prevent exploding gradients
-      if (grad < clipMin) {
-        grad = clipMin;
-      } else if (grad > clipMax) {
-        grad = clipMax;
-      }
-
-      this.gradient[i] = grad;
-    }
-  }
-
-  /**
-   * Update velocity with momentum and return weight deltas.
-   *
-   * Momentum update:
-   * v = μ × v + η × g
-   *
-   * @param learningRate - Current learning rate (η)
-   * @param outputIndex - Output dimension index
-   * @returns View into velocity array for this output (deltas to subtract)
-   *
-   * Time complexity: O(featureCount)
-   * Space complexity: O(1)
-   */
-  updateVelocityAndGetDelta(
-    learningRate: number,
-    outputIndex: number,
-  ): Float64Array {
-    if (this.velocity === null || this.gradient === null) {
-      return new Float64Array(0);
-    }
-
-    const offset = outputIndex * this.featureCount;
-    const len = this.featureCount;
-
-    for (let i = 0; i < len; i++) {
-      // v = μ×v + η×g
-      this.velocity[offset + i] = this.momentum * this.velocity[offset + i] +
-        learningRate * this.gradient[i];
-    }
-
-    // Return subarray view (no copy)
-    return this.velocity.subarray(offset, offset + len);
-  }
-
-  /**
-   * Reset velocity and gradient to zero.
-   *
-   * Time complexity: O(n)
-   * Space complexity: O(1)
-   */
-  reset(): void {
-    if (this.velocity !== null) {
-      const len = this.velocity.length;
-      for (let i = 0; i < len; i++) {
-        this.velocity[i] = 0;
-      }
-    }
-    if (this.gradient !== null) {
-      const len = this.gradient.length;
-      for (let i = 0; i < len; i++) {
-        this.gradient[i] = 0;
-      }
-    }
-  }
-}
-
-// ============================================================================
-// STATISTICS TRACKER
-// ============================================================================
-
-/**
- * Tracks model statistics incrementally using Welford's algorithm.
- * Computes R², RMSE, and residual variance without storing data.
- *
- * R² = 1 - SS_res / SS_tot
- * RMSE = √(Σ(y - ŷ)² / n)
- *
- * @class StatisticsTracker
- * @implements {IStatisticsTracker}
- */
-class StatisticsTracker implements IStatisticsTracker {
-  /** Total number of samples processed */
-  private sampleCount: number = 0;
-  /** Sum of squared residuals: Σ(y - ŷ)² */
-  private ssRes: number = 0;
-  /** Sum of squared total: Σ(y - ȳ)² */
-  private ssTot: number = 0;
-  /** Sum of squared errors for RMSE */
-  private sumSquaredError: number = 0;
-  /** Running mean of y values per dimension */
-  private yMean: Float64Array | null = null;
-  /** M2 accumulator for y variance (Welford's algorithm) */
-  private yM2: Float64Array | null = null;
-  /** Output dimension */
-  private outputDimension: number = 0;
-
-  // new fields for EMA-based R²
-  private readonly emaDecay: number = 0.99;
-  private emaSqError: number = 0;
-  private emaInitialized: boolean = false;
-
-  /**
-   * Initialize tracker for given output dimension.
-   *
-   * @param outputDimension - Number of output targets
-   *
-   * Time complexity: O(outputDimension)
-   * Space complexity: O(outputDimension)
-   */
-  initialize(outputDimension: number): void {
-    this.outputDimension = outputDimension;
-    this.yMean = new Float64Array(outputDimension);
-    this.yM2 = new Float64Array(outputDimension);
-    this.resetCounters();
-  }
-
-  /**
-   * Reset all counters to initial state.
-   */
-  private resetCounters(): void {
-    this.sampleCount = 0;
-    this.ssRes = 0;
-    this.ssTot = 0;
-    this.sumSquaredError = 0;
-    this.emaSqError = 0; // Add this
-    this.emaInitialized = false; // Add this
-    if (this.yMean !== null) {
-      for (let i = 0; i < this.outputDimension; i++) {
-        this.yMean[i] = 0;
-      }
-    }
-    if (this.yM2 !== null) {
-      for (let i = 0; i < this.outputDimension; i++) {
-        this.yM2[i] = 0;
-      }
-    }
-  }
-
-  /**
-   * Update statistics with new prediction.
-   * Uses Welford's algorithm for numerically stable variance calculation.
-   *
-   * @param actual - Actual target values
-   * @param predicted - Predicted values
-   *
-   * Time complexity: O(outputDimension)
-   * Space complexity: O(1)
-   */
-
-  update(actual: Float64Array, predicted: Float64Array): void {
-    if (this.yMean === null || this.yM2 === null) {
-      return;
-    }
-
-    this.sampleCount++;
-    const n = this.sampleCount;
-
-    let sampleSqError = 0; // Add this to track per-sample error
-    this.ssTot = 0;
-
-    for (let i = 0; i < this.outputDimension; i++) {
-      const y = actual[i];
-      const yHat = predicted[i];
-      const error = y - yHat;
-
-      this.ssRes += error * error;
-      sampleSqError += error * error; // Add this
-      this.sumSquaredError += error * error;
-
-      const delta = y - this.yMean[i];
-      this.yMean[i] += delta / n;
-      const delta2 = y - this.yMean[i];
-      this.yM2[i] += delta * delta2;
-
-      this.ssTot += this.yM2[i];
-    }
-
-    // Add EMA update
-    if (!this.emaInitialized) {
-      this.emaSqError = sampleSqError;
-      this.emaInitialized = true;
-    } else {
-      this.emaSqError = this.emaDecay * this.emaSqError +
-        (1 - this.emaDecay) * sampleSqError;
-    }
-  }
-
-  /**
-   * Get current R-squared value.
-   *
-   * Formula: R² = 1 - (SS_res / SS_tot)
-   *
-   * R² measures the proportion of variance explained by the model.
-   * Range: [0, 1] where 1 indicates perfect fit.
-   *
-   * @returns R-squared value clamped to [0, 1]
-   *
-   * Time complexity: O(1)
-   * Space complexity: O(1)
-   */
-  getRSquared(): number {
-    if (this.sampleCount < 2 || this.ssTot < 1e-10) {
-      return 0;
-    }
-
-    // Use EMA-based R²: compare recent errors to overall variance
-    const avgVariancePerSample = this.ssTot / this.sampleCount;
-
-    const rSquared = 1 - (this.emaSqError / avgVariancePerSample);
-
-    if (rSquared < 0) return 0;
-    if (rSquared > 1) return 1;
-    return rSquared;
-  }
-
-  /**
-   * Get current RMSE (Root Mean Squared Error).
-   *
-   * Formula: RMSE = √(Σ(y - ŷ)² / (n × output_dim))
-   *
-   * @returns RMSE value
-   *
-   * Time complexity: O(1)
-   * Space complexity: O(1)
-   */
-  getRMSE(): number {
-    if (this.sampleCount === 0) {
-      return 0;
-    }
-    return Math.sqrt(
-      this.sumSquaredError / (this.sampleCount * this.outputDimension),
-    );
-  }
-
-  /**
-   * Get residual variance for confidence interval estimation.
-   *
-   * Formula: σ² = SS_res / (n - p)
-   * where p is the number of parameters (degrees of freedom adjustment)
-   *
-   * @param numParameters - Number of model parameters
-   * @returns Estimated residual variance
-   *
-   * Time complexity: O(1)
-   * Space complexity: O(1)
-   */
-  getResidualVariance(numParameters: number): number {
-    const degreesOfFreedom = this.sampleCount - numParameters;
-    if (degreesOfFreedom <= 0) {
-      return 1; // Return 1 if insufficient data
-    }
-    return this.ssRes / degreesOfFreedom;
-  }
-
-  /**
-   * Get total number of samples processed.
-   *
-   * @returns Sample count
-   */
-  getSampleCount(): number {
-    return this.sampleCount;
-  }
-
-  /**
-   * Reset all statistics to initial state.
-   *
-   * Time complexity: O(outputDimension)
-   * Space complexity: O(1)
-   */
-  reset(): void {
-    this.resetCounters();
-  }
-}
-
-// ============================================================================
-// PREDICTION ENGINE
-// ============================================================================
-
-/**
- * Handles prediction computation and confidence interval calculation.
- * Uses t-distribution for small samples, z-distribution for large samples.
- *
- * Prediction formula: ŷ = wᵀφ (dot product of weights and features)
- *
- * Confidence interval: ŷ ± t_{α/2} × SE
- * where SE is the standard error of prediction
- *
- * @class PredictionEngine
- * @implements {IPredictionEngine}
- */
-class PredictionEngine implements IPredictionEngine {
-  /** Feature count */
-  private featureCount: number = 0;
-  /** Output dimension */
-  private outputDimension: number = 0;
-
-  /**
-   * T-distribution critical values for 95% confidence.
-   * Key is degrees of freedom, value is critical value.
-   */
-  private static readonly T_CRITICAL_95: { [df: number]: number } = {
-    1: 12.706,
-    2: 4.303,
-    3: 3.182,
-    4: 2.776,
-    5: 2.571,
-    6: 2.447,
-    7: 2.365,
-    8: 2.306,
-    9: 2.262,
-    10: 2.228,
-    11: 2.201,
-    12: 2.179,
-    13: 2.160,
-    14: 2.145,
-    15: 2.131,
-    16: 2.120,
-    17: 2.110,
-    18: 2.101,
-    19: 2.093,
-    20: 2.086,
-    25: 2.060,
-    30: 2.042,
-    40: 2.021,
-    50: 2.009,
-    60: 2.000,
-    80: 1.990,
-    100: 1.984,
-    120: 1.980,
-  };
-
-  /** Z critical value for 95% confidence (large samples) */
-  private static readonly Z_CRITICAL_95: number = 1.96;
-
-  /**
-   * Initialize prediction engine.
-   *
-   * @param featureCount - Number of polynomial features
-   * @param outputDimension - Number of output targets
-   */
-  initialize(featureCount: number, outputDimension: number): void {
-    this.featureCount = featureCount;
-    this.outputDimension = outputDimension;
-  }
-
-  /**
-   * Compute prediction from polynomial features.
-   *
-   * Formula: ŷⱼ = Σᵢ(wⱼᵢ × φᵢ) for each output j
-   *
-   * @param features - Polynomial features (φ)
-   * @param weightManager - Weight manager instance
-   * @param output - Output buffer for predictions
-   *
-   * Time complexity: O(outputDimension × featureCount)
-   * Space complexity: O(1)
-   */
-  predict(
-    features: Float64Array,
-    weightManager: IWeightManager,
-    output: Float64Array,
-  ): void {
-    for (let o = 0; o < this.outputDimension; o++) {
-      let sum = 0;
-      for (let f = 0; f < this.featureCount; f++) {
-        sum += weightManager.getWeight(o, f) * features[f];
-      }
-      output[o] = sum;
-    }
-  }
-
-  /**
-   * Get critical value for confidence interval calculation.
-   * Uses t-distribution for small samples (n ≤ 30), z-distribution otherwise.
-   *
-   * @param sampleCount - Number of training samples
-   * @param confidenceLevel - Desired confidence level (e.g., 0.95)
-   * @returns Critical value
-   *
-   * Time complexity: O(1)
-   * Space complexity: O(1)
-   */
-  getCriticalValue(sampleCount: number, confidenceLevel: number): number {
-    // Scale factor for different confidence levels (approximate)
-    // Based on ratio to 95% critical values
-    let scaleFactor = 1.0;
-    if (confidenceLevel !== 0.95) {
-      if (confidenceLevel >= 0.99) {
-        scaleFactor = 1.32; // ≈ z_0.005 / z_0.025
-      } else if (confidenceLevel >= 0.90) {
-        scaleFactor = 0.84; // ≈ z_0.05 / z_0.025
-      } else if (confidenceLevel >= 0.80) {
-        scaleFactor = 0.66; // ≈ z_0.10 / z_0.025
-      }
-    }
-
-    // Use z-distribution for large samples
-    if (sampleCount > 120) {
-      return PredictionEngine.Z_CRITICAL_95 * scaleFactor;
-    }
-
-    // Find closest t-critical value
-    const df = Math.max(1, sampleCount - this.featureCount);
-
-    // Check exact match first
-    if (PredictionEngine.T_CRITICAL_95[df] !== undefined) {
-      return PredictionEngine.T_CRITICAL_95[df] * scaleFactor;
-    }
-
-    // Find closest available df
-    const availableDFs = Object.keys(PredictionEngine.T_CRITICAL_95)
-      .map((k) => parseInt(k, 10))
-      .sort((a, b) => a - b);
-
-    for (let i = 0; i < availableDFs.length; i++) {
-      if (availableDFs[i] >= df) {
-        return PredictionEngine.T_CRITICAL_95[availableDFs[i]] * scaleFactor;
-      }
-    }
-
-    // Fall back to z for very large df
-    return PredictionEngine.Z_CRITICAL_95 * scaleFactor;
-  }
-
-  /**
-   * Calculate standard error for a prediction.
-   *
-   * Simplified estimation: SE = √(σ² × (1 + 1/n + leverage))
-   * where leverage ≈ ||φ||² / n
-   *
-   * @param features - Polynomial features used for prediction
-   * @param residualVariance - Estimated residual variance
-   * @param sampleCount - Number of training samples
-   * @returns Standard error estimate
-   *
-   * Time complexity: O(featureCount)
-   * Space complexity: O(1)
-   */
-  calculateStandardError(
-    features: Float64Array,
-    residualVariance: number,
-    sampleCount: number,
-  ): number {
-    if (sampleCount < 2) {
-      return 1; // Return default if insufficient data
-    }
-
-    // Calculate approximate leverage: h ≈ ||φ||² / n
-    let featureSumSq = 0;
-    for (let i = 0; i < this.featureCount; i++) {
-      featureSumSq += features[i] * features[i];
-    }
-    const leverage = featureSumSq / sampleCount;
-
-    // SE = √(σ² × (1 + 1/n + h))
-    const variance = residualVariance * (1 + 1 / sampleCount + leverage);
-    const se = Math.sqrt(variance);
-
-    // Return finite value
-    if (!isFinite(se) || se < 1e-10) {
-      return Math.sqrt(residualVariance);
-    }
-    return se;
-  }
-
-  /**
-   * Reset prediction engine state.
-   */
-  reset(): void {
-    // No state to reset for this implementation
-  }
-}
-
-// ============================================================================
-// CONFIGURATION BUILDER
-// ============================================================================
-
-/**
- * Builder class for MultivariatePolynomialRegression configuration.
- * Implements the Builder pattern for fluent, validated configuration.
- *
- * @class ConfigurationBuilder
- *
- * @example
- * const config = new ConfigurationBuilder()
- *   .withPolynomialDegree(3)
- *   .withLearningRate(0.005)
- *   .withMomentum(0.95)
- *   .withNormalizationMethod('z-score')
- *   .build();
- *
- * const model = new MultivariatePolynomialRegression(config);
- */
-class ConfigurationBuilder {
-  /** Internal configuration being built */
-  private readonly config: IConfiguration;
-
-  /**
-   * Creates a new ConfigurationBuilder with default values.
-   */
-  constructor() {
-    this.config = {
-      polynomialDegree: 2,
-      enableNormalization: true,
-      normalizationMethod: "min-max",
-      learningRate: 0.01,
-      learningRateDecay: 0.999,
-      momentum: 0.9,
-      regularization: 1e-6,
-      gradientClipValue: 1.0,
-      confidenceLevel: 0.95,
-      batchSize: 1,
-    };
-  }
-
-  /**
-   * Set polynomial degree for feature expansion.
-   *
-   * @param degree - Polynomial degree (minimum: 1)
-   * @returns this builder for chaining
-   * @throws Error if degree < 1
-   *
-   * @example
-   * builder.withPolynomialDegree(3); // Use cubic features
-   */
-  withPolynomialDegree(degree: number): ConfigurationBuilder {
-    if (degree < 1) {
-      throw new Error("Polynomial degree must be at least 1");
-    }
-    this.config.polynomialDegree = Math.floor(degree);
-    return this;
-  }
-
-  /**
-   * Enable or disable input normalization.
-   *
-   * @param enabled - Whether to normalize inputs
-   * @returns this builder for chaining
-   */
-  withNormalization(enabled: boolean): ConfigurationBuilder {
-    this.config.enableNormalization = enabled;
-    return this;
-  }
-
-  /**
-   * Set normalization method.
-   *
-   * @param method - 'none', 'min-max', or 'z-score'
-   * @returns this builder for chaining
-   */
-  withNormalizationMethod(
-    method: "none" | "min-max" | "z-score",
-  ): ConfigurationBuilder {
-    this.config.normalizationMethod = method;
-    return this;
-  }
-
-  /**
-   * Set initial learning rate for SGD.
-   *
-   * @param rate - Learning rate (range: (0, 1])
-   * @returns this builder for chaining
-   * @throws Error if rate not in valid range
-   */
-  withLearningRate(rate: number): ConfigurationBuilder {
-    if (rate <= 0 || rate > 1) {
-      throw new Error("Learning rate must be in range (0, 1]");
-    }
-    this.config.learningRate = rate;
-    return this;
-  }
-
-  /**
-   * Set learning rate decay factor.
-   * Applied after each sample: η = η × decay
-   *
-   * @param decay - Decay factor (range: (0, 1])
-   * @returns this builder for chaining
-   * @throws Error if decay not in valid range
-   */
-  withLearningRateDecay(decay: number): ConfigurationBuilder {
-    if (decay <= 0 || decay > 1) {
-      throw new Error("Learning rate decay must be in range (0, 1]");
-    }
-    this.config.learningRateDecay = decay;
-    return this;
-  }
-
-  /**
-   * Set momentum coefficient.
-   * v = momentum × v + η × g
-   *
-   * @param momentum - Momentum value (range: [0, 1))
-   * @returns this builder for chaining
-   * @throws Error if momentum not in valid range
-   */
-  withMomentum(momentum: number): ConfigurationBuilder {
-    if (momentum < 0 || momentum >= 1) {
-      throw new Error("Momentum must be in range [0, 1)");
-    }
-    this.config.momentum = momentum;
-    return this;
-  }
-
-  /**
-   * Set L2 regularization coefficient.
-   * Adds λ × w to gradient to prevent overfitting.
-   *
-   * @param regularization - Regularization coefficient (≥ 0)
-   * @returns this builder for chaining
-   * @throws Error if regularization < 0
-   */
-  withRegularization(regularization: number): ConfigurationBuilder {
-    if (regularization < 0) {
-      throw new Error("Regularization must be non-negative");
-    }
-    this.config.regularization = regularization;
-    return this;
-  }
-
-  /**
-   * Set gradient clipping threshold.
-   * Gradients are clipped to [-clipValue, clipValue].
-   *
-   * @param clipValue - Maximum gradient magnitude (> 0)
-   * @returns this builder for chaining
-   * @throws Error if clipValue ≤ 0
-   */
-  withGradientClipValue(clipValue: number): ConfigurationBuilder {
-    if (clipValue <= 0) {
-      throw new Error("Gradient clip value must be positive");
-    }
-    this.config.gradientClipValue = clipValue;
-    return this;
-  }
-
-  /**
-   * Set confidence level for prediction intervals.
-   *
-   * @param level - Confidence level (range: (0, 1))
-   * @returns this builder for chaining
-   * @throws Error if level not in valid range
-   */
-  withConfidenceLevel(level: number): ConfigurationBuilder {
-    if (level <= 0 || level >= 1) {
-      throw new Error("Confidence level must be in range (0, 1)");
-    }
-    this.config.confidenceLevel = level;
-    return this;
-  }
-
-  /**
-   * Set batch size for mini-batch SGD.
-   *
-   * @param size - Batch size (minimum: 1)
-   * @returns this builder for chaining
-   * @throws Error if size < 1
-   */
-  withBatchSize(size: number): ConfigurationBuilder {
-    if (size < 1) {
-      throw new Error("Batch size must be at least 1");
-    }
-    this.config.batchSize = Math.floor(size);
-    return this;
-  }
-
-  /**
-   * Build and return the configuration object.
-   *
-   * @returns Immutable configuration object
-   */
-  build(): Readonly<IConfiguration> {
-    return Object.freeze({ ...this.config });
-  }
-}
-
-// ============================================================================
-// MAIN CLASS: MULTIVARIATE POLYNOMIAL REGRESSION
-// ============================================================================
-
-/**
- * Multivariate Polynomial Regression with Online Learning using SGD.
- *
- * This class implements multivariate polynomial regression with incremental
- * online learning using Stochastic Gradient Descent (SGD) with momentum.
- *
- * ## Features:
- * - **Incremental online learning**: Process data point-by-point without storing all data
- * - **Configurable polynomial degree**: Expand features to capture non-linear relationships
- * - **Multiple normalization strategies**: min-max, z-score, or none
- * - **Momentum-based SGD**: Faster convergence with velocity accumulation
- * - **Learning rate decay**: Automatic learning rate annealing
- * - **L2 regularization**: Prevent overfitting with weight decay
- * - **Gradient clipping**: Numerical stability against exploding gradients
- * - **Confidence intervals**: Prediction uncertainty quantification
- *
- * ## SGD Algorithm:
- * For each new sample (x, y):
- * 1. Generate polynomial features: φ = polynomial_features(normalize(x))
- * 2. Compute prediction: ŷ = wᵀ·φ
- * 3. Compute prediction error: e = y - ŷ
- * 4. Compute gradient with L2 regularization: g = -e·φ + λ·w
- * 5. Apply gradient clipping: g = clip(g, -clipValue, clipValue)
- * 6. Update velocity with momentum: v = μ·v + η·g
- * 7. Update weights: w = w - v
- * 8. Decay learning rate: η = η × decay
- *
- * @class MultivariatePolynomialRegression
- *
- * @example
- * // Basic usage with default configuration
- * const model = new MultivariatePolynomialRegression();
- *
- * // Train incrementally
- * model.fitOnline({
- *   xCoordinates: [[1, 2], [2, 3], [3, 4], [4, 5]],
- *   yCoordinates: [[5], [11], [19], [29]]
- * });
- *
- * // Make predictions
- * const result = model.predict({ futureSteps: 2 });
- * console.log(result.predictions);
- *
- * @example
- * // Custom configuration using builder
- * const config = new ConfigurationBuilder()
- *   .withPolynomialDegree(3)
- *   .withLearningRate(0.005)
- *   .withMomentum(0.95)
- *   .withNormalizationMethod('z-score')
- *   .withConfidenceLevel(0.99)
- *   .build();
- *
- * const model = new MultivariatePolynomialRegression(config);
- *
- * @example
- * // Predict at specific input points
- * const result = model.predict({
- *   futureSteps: 0,
- *   inputPoints: [[5, 6], [6, 7], [7, 8]]
- * });
- */
-class MultivariatePolynomialRegression {
-  // ========== Configuration ==========
-  /** Frozen configuration object */
-  private readonly config: Readonly<IConfiguration>;
-
-  // ========== Component Managers (Dependency Injection) ==========
-  /** Shared matrix operations utility */
-  private readonly matrixOps: MatrixOperations;
-  /** Input normalizer */
-  private readonly normalizer: INormalizer;
-  /** Polynomial feature generator */
-  private readonly featureGenerator: IPolynomialFeatureGenerator;
-  /** Weight storage and access */
-  private readonly weightManager: IWeightManager;
-  /** Gradient computation and momentum */
-  private readonly gradientManager: IGradientManager;
-  /** Prediction and confidence intervals */
-  private readonly predictionEngine: IPredictionEngine;
-  /** Model statistics tracking */
-  private readonly statisticsTracker: IStatisticsTracker;
-
-  // ========== State ==========
-  /** Number of input features */
-  private inputDimension: number = 0;
-  /** Number of output targets */
-  private outputDimension: number = 0;
-  /** Current (decayed) learning rate */
-  private currentLearningRate: number;
-  /** Whether model has been initialized with data */
-  private isInitialized: boolean = false;
-
-  // ========== Preallocated Buffers (Hot Path Optimization) ==========
-  /** Buffer for raw input */
-  private inputBuffer: Float64Array | null = null;
-  /** Buffer for normalized input */
-  private normalizedBuffer: Float64Array | null = null;
-  /** Buffer for polynomial features */
-  private featureBuffer: Float64Array | null = null;
-  /** Buffer for predictions */
-  private predictionBuffer: Float64Array | null = null;
-  /** Buffer for target values */
-  private targetBuffer: Float64Array | null = null;
-  /** Buffer for weight access */
-  private weightBuffer: Float64Array | null = null;
-  /** Ring buffer of recent inputs for extrapolation */
-  private lastInputs: Float64Array[] = [];
-  /** Maximum number of inputs to retain */
-  private readonly maxRetainedInputs: number = 10;
-
-  /**
-   * Creates a new MultivariatePolynomialRegression instance.
-   *
-   * @param config - Configuration object (partial allowed, defaults applied)
-   *
-   * Time complexity: O(1) - lazy initialization
-   * Space complexity: O(1) - buffers allocated on first fitOnline
-   *
-   * @example
-   * // Default configuration
-   * const model = new MultivariatePolynomialRegression();
-   *
-   * @example
-   * // Partial configuration (unspecified values use defaults)
-   * const model = new MultivariatePolynomialRegression({
-   *   polynomialDegree: 3,
-   *   learningRate: 0.005
-   * });
-   *
-   * @example
-   * // Full configuration via builder
-   * const config = new ConfigurationBuilder()
-   *   .withPolynomialDegree(2)
-   *   .withLearningRate(0.01)
-   *   .build();
-   * const model = new MultivariatePolynomialRegression(config);
-   */
-  constructor(config?: Partial<IConfiguration>) {
-    // Merge provided config with defaults
-    this.config = Object.freeze({
-      polynomialDegree: config?.polynomialDegree ?? 2,
-      enableNormalization: config?.enableNormalization ?? true,
-      normalizationMethod: config?.normalizationMethod ?? "min-max",
-      learningRate: config?.learningRate ?? 0.01,
-      learningRateDecay: config?.learningRateDecay ?? 0.999,
-      momentum: config?.momentum ?? 0.9,
-      regularization: config?.regularization ?? 1e-6,
-      gradientClipValue: config?.gradientClipValue ?? 1.0,
-      confidenceLevel: config?.confidenceLevel ?? 0.95,
-      batchSize: config?.batchSize ?? 1,
-    });
-
-    this.currentLearningRate = this.config.learningRate;
-
-    // Initialize components (Dependency Injection pattern)
-    this.matrixOps = new MatrixOperations();
-    this.normalizer = new Normalizer(
-      this.config.enableNormalization,
-      this.config.normalizationMethod,
-    );
-    this.featureGenerator = new PolynomialFeatureGenerator(
-      this.config.polynomialDegree,
-    );
-    this.weightManager = new WeightManager();
-    this.gradientManager = new GradientManager(
-      this.config.momentum,
-      this.config.gradientClipValue,
-    );
-    this.predictionEngine = new PredictionEngine();
-    this.statisticsTracker = new StatisticsTracker();
-  }
-
-  /**
-   * Initialize model for specific input/output dimensions.
-   * Called automatically on first fitOnline call.
-   *
-   * @param inputDim - Number of input features
-   * @param outputDim - Number of output targets
-   *
-   * Time complexity: O(featureCount × inputDim) for exponent generation
-   * Space complexity: O(featureCount × (inputDim + outputDim))
-   */
-  private initialize(inputDim: number, outputDim: number): void {
-    this.inputDimension = inputDim;
-    this.outputDimension = outputDim;
-
-    // Initialize feature generator first (needed for feature count)
-    this.featureGenerator.initialize(inputDim);
-    const featureCount = this.featureGenerator.getFeatureCount();
-
-    // Initialize all components
-    this.normalizer.initialize(inputDim);
-    this.weightManager.initialize(featureCount, outputDim);
-    this.gradientManager.initialize(featureCount, outputDim);
-    this.predictionEngine.initialize(featureCount, outputDim);
-    this.statisticsTracker.initialize(outputDim);
-
-    // Preallocate buffers for hot paths
-    this.inputBuffer = new Float64Array(inputDim);
-    this.normalizedBuffer = new Float64Array(inputDim);
-    this.featureBuffer = new Float64Array(featureCount);
-    this.predictionBuffer = new Float64Array(outputDim);
-    this.targetBuffer = new Float64Array(outputDim);
-    this.weightBuffer = new Float64Array(featureCount);
-
-    this.isInitialized = true;
-  }
-
-  /**
-   * Train the model incrementally using online SGD.
-   *
-   * Processes each sample through the SGD algorithm:
-   * 1. Normalize input and generate polynomial features
-   * 2. Compute prediction and error
-   * 3. Calculate gradient with regularization
-   * 4. Update weights using momentum
-   * 5. Decay learning rate
-   *
-   * @param params - Training data with xCoordinates and yCoordinates
-   * @param params.xCoordinates - Input samples, shape [n_samples][n_features]
-   * @param params.yCoordinates - Target values, shape [n_samples][n_outputs]
-   * @throws Error if xCoordinates and yCoordinates have different lengths
-   * @throws Error if dimensions change after initialization
-   *
-   * Time complexity: O(n_samples × n_outputs × n_features²) worst case
-   * Space complexity: O(1) - uses preallocated buffers
-   *
-   * @example
-   * model.fitOnline({
-   *   xCoordinates: [[1, 2], [2, 3], [3, 4]],
-   *   yCoordinates: [[5], [10], [17]]
-   * });
-   *
-   * @example
-   * // Incremental updates (can be called multiple times)
-   * model.fitOnline({ xCoordinates: [[4, 5]], yCoordinates: [[26]] });
-   * model.fitOnline({ xCoordinates: [[5, 6]], yCoordinates: [[37]] });
-   */
-  fitOnline(
-    params: { xCoordinates: number[][]; yCoordinates: number[][] },
-  ): void {
-    const { xCoordinates, yCoordinates } = params;
-
-    // Early exit for empty data
-    if (xCoordinates.length === 0 || yCoordinates.length === 0) {
-      return;
-    }
-
-    // Validate input lengths match
-    if (xCoordinates.length !== yCoordinates.length) {
-      throw new Error(
-        "xCoordinates and yCoordinates must have the same number of samples",
-      );
-    }
-
-    const inputDim = xCoordinates[0].length;
-    const outputDim = yCoordinates[0].length;
-
-    // Lazy initialization on first call
-    if (!this.isInitialized) {
-      this.initialize(inputDim, outputDim);
-    }
-
-    // Validate dimensions remain consistent
-    if (
-      inputDim !== this.inputDimension || outputDim !== this.outputDimension
-    ) {
-      throw new Error(
-        `Dimension mismatch: expected (${this.inputDimension}, ${this.outputDimension}), ` +
-          `got (${inputDim}, ${outputDim})`,
-      );
-    }
-
-    const numSamples = xCoordinates.length;
-    const featureCount = this.featureGenerator.getFeatureCount();
-
-    // Process each sample
-    for (let s = 0; s < numSamples; s++) {
-      const x = xCoordinates[s];
-      const y = yCoordinates[s];
-
-      // Copy input to typed array buffer
+    const exponents = this._exponentCache!;
+    const inputDim = this._inputDimension;
+    const featureCount = this._featureCount;
+
+    for (let f = 0; f < featureCount; f++) {
+      const exp = exponents[f];
+      let value = 1.0;
+
+      // Compute product x₁^e₁ · x₂^e₂ · ... · x_n^e_n
       for (let i = 0; i < inputDim; i++) {
-        this.inputBuffer![i] = x[i];
+        const e = exp[i];
+        if (e === 0) continue;
+
+        const x = input[i];
+        // Optimized power computation for common small exponents
+        switch (e) {
+          case 1:
+            value *= x;
+            break;
+          case 2:
+            value *= x * x;
+            break;
+          case 3:
+            value *= x * x * x;
+            break;
+          case 4:
+            const x2 = x * x;
+            value *= x2 * x2;
+            break;
+          default:
+            // Fall back to Math.pow for larger exponents
+            value *= Math.pow(x, e);
+        }
       }
 
-      // Update normalization statistics BEFORE normalizing
-      // This ensures statistics reflect all seen data
-      this.normalizer.updateStatistics(this.inputBuffer!);
+      // Clamp to prevent numerical overflow
+      if (!isFinite(value)) {
+        value = value > 0 ? 1e10 : -1e10;
+      }
 
-      // STEP 1: Normalize input
-      this.normalizer.normalizeInPlace(
-        this.inputBuffer!,
-        this.normalizedBuffer!,
-      );
+      output[f] = value;
+    }
+  }
 
-      // STEP 1 (cont.): Generate polynomial features
-      // φ = [1, x₁, x₂, x₁², x₁x₂, x₂², ...]
-      this.featureGenerator.generateFeaturesInPlace(
-        this.normalizedBuffer!,
-        this.featureBuffer!,
-      );
+  // =========================================================================
+  // PRIVATE METHODS - FORWARD PASS
+  // =========================================================================
 
-      // STEP 2: Compute prediction ŷ = wᵀφ
-      this.predictionEngine.predict(
-        this.featureBuffer!,
-        this.weightManager,
-        this.predictionBuffer!,
-      );
+  /**
+   * Forward pass: ŷ = W·φ(x)
+   *
+   * Computes matrix-vector product with flattened weight matrix.
+   * W is stored as [outputDim × featureCount] in row-major order.
+   *
+   * @param features - Polynomial feature vector φ(x)
+   * @param output - Output buffer for predictions ŷ
+   */
+  private _forward(features: Float64Array, output: Float64Array): void {
+    const weights = this._weights!;
+    const outputDim = this._outputDimension;
+    const featureCount = this._featureCount;
 
-      // Copy target to typed array buffer
+    for (let i = 0; i < outputDim; i++) {
+      let sum = 0;
+      const offset = i * featureCount;
+
+      // Unrolled inner loop for better performance
+      const fc4 = featureCount - (featureCount % 4);
+      let j = 0;
+
+      for (; j < fc4; j += 4) {
+        sum += weights[offset + j] * features[j] +
+          weights[offset + j + 1] * features[j + 1] +
+          weights[offset + j + 2] * features[j + 2] +
+          weights[offset + j + 3] * features[j + 3];
+      }
+
+      for (; j < featureCount; j++) {
+        sum += weights[offset + j] * features[j];
+      }
+
+      output[i] = sum;
+    }
+  }
+
+  // =========================================================================
+  // PRIVATE METHODS - LOSS AND ERROR
+  // =========================================================================
+
+  /**
+   * Computes prediction error: e = y - ŷ
+   *
+   * @param target - Target values y
+   * @param prediction - Predicted values ŷ
+   * @param error - Output buffer for error e
+   */
+  private _computeError(
+    target: Float64Array,
+    prediction: Float64Array,
+    error: Float64Array,
+  ): void {
+    const len = target.length;
+    for (let i = 0; i < len; i++) {
+      error[i] = target[i] - prediction[i];
+    }
+  }
+
+  /**
+   * Computes mean squared error loss: L = (1/2)‖e‖²
+   *
+   * @param error - Error vector
+   * @returns MSE loss value
+   */
+  private _computeMSELoss(error: Float64Array): number {
+    const len = error.length;
+    let sum = 0;
+
+    // Unrolled loop for performance
+    const len4 = len - (len % 4);
+    let i = 0;
+
+    for (; i < len4; i += 4) {
+      const e0 = error[i];
+      const e1 = error[i + 1];
+      const e2 = error[i + 2];
+      const e3 = error[i + 3];
+      sum += e0 * e0 + e1 * e1 + e2 * e2 + e3 * e3;
+    }
+
+    for (; i < len; i++) {
+      sum += error[i] * error[i];
+    }
+
+    return sum * 0.5;
+  }
+
+  // =========================================================================
+  // PRIVATE METHODS - GRADIENT COMPUTATION
+  // =========================================================================
+
+  /**
+   * Computes gradient and stores in gradient buffer
+   *
+   * Gradient formula: g = -(e ⊗ φ) + λW
+   *
+   * Where:
+   * - e is the error vector
+   * - φ is the feature vector
+   * - λ is the regularization strength
+   * - ⊗ is the outer product
+   *
+   * @param error - Error vector e
+   * @param features - Feature vector φ
+   * @param weight - Sample weight (for outlier downweighting)
+   * @returns L2 norm of gradient
+   */
+  private _computeGradient(
+    error: Float64Array,
+    features: Float64Array,
+    weight: number,
+  ): number {
+    const gradient = this._gradientBuffer!;
+    const weights = this._weights!;
+    const lambda = this._regularizationStrength;
+    const outputDim = this._outputDimension;
+    const featureCount = this._featureCount;
+
+    let normSum = 0;
+
+    for (let i = 0; i < outputDim; i++) {
+      const offset = i * featureCount;
+      const e = -error[i] * weight; // Negative because gradient of (y - ŷ)² is -2(y - ŷ)
+
+      for (let j = 0; j < featureCount; j++) {
+        // g_ij = -e_i * φ_j + λ * W_ij
+        const grad = e * features[j] + lambda * weights[offset + j];
+        gradient[offset + j] = grad;
+        normSum += grad * grad;
+      }
+    }
+
+    return Math.sqrt(normSum);
+  }
+
+  /**
+   * Accumulates gradient into buffer (for mini-batch)
+   *
+   * Accumulates: g += -(e ⊗ φ)
+   *
+   * @param error - Error vector
+   * @param features - Feature vector
+   * @param accumulator - Gradient accumulator buffer
+   */
+  private _accumulateGradient(
+    error: Float64Array,
+    features: Float64Array,
+    accumulator: Float64Array,
+  ): void {
+    const outputDim = this._outputDimension;
+    const featureCount = this._featureCount;
+
+    for (let i = 0; i < outputDim; i++) {
+      const offset = i * featureCount;
+      const e = -error[i];
+
+      for (let j = 0; j < featureCount; j++) {
+        accumulator[offset + j] += e * features[j];
+      }
+    }
+  }
+
+  // =========================================================================
+  // PRIVATE METHODS - ADAM OPTIMIZER
+  // =========================================================================
+
+  /**
+   * Gets effective learning rate with warmup and cosine decay
+   *
+   * Learning rate schedule:
+   * - Warmup phase (t < warmup_steps): η_t = η * t / warmup_steps
+   * - Decay phase: η_t = η * 0.5 * (1 + cos(π * progress))
+   *
+   * @returns Current effective learning rate
+   */
+  private _getEffectiveLearningRate(): number {
+    const t = this._updateCount;
+
+    if (t < this._warmupSteps) {
+      // Linear warmup: η_t = η * (t+1) / warmup_steps
+      return this._learningRate * (t + 1) / this._warmupSteps;
+    }
+
+    // Cosine decay after warmup
+    const warmupSteps = this._warmupSteps;
+    const totalSteps = this._totalSteps;
+    const decaySteps = totalSteps - warmupSteps;
+
+    if (decaySteps <= 0) {
+      return this._learningRate;
+    }
+
+    const progress = Math.min(1.0, (t - warmupSteps) / decaySteps);
+    // η_t = η * 0.5 * (1 + cos(π * progress))
+    const cosineDecay = 0.5 * (1.0 + Math.cos(Math.PI * progress));
+
+    return this._learningRate * cosineDecay;
+  }
+
+  /**
+   * Performs Adam optimizer update step
+   *
+   * Adam algorithm:
+   * m = β₁m + (1-β₁)g         (first moment estimate)
+   * v = β₂v + (1-β₂)g²        (second moment estimate)
+   * m̂ = m / (1 - β₁ᵗ)        (bias correction)
+   * v̂ = v / (1 - β₂ᵗ)        (bias correction)
+   * W = W - η * m̂ / (√v̂ + ε)  (parameter update)
+   *
+   * @param lr - Current learning rate
+   */
+  private _adamUpdate(lr: number): void {
+    const t = this._updateCount;
+    const beta1 = this._beta1;
+    const beta2 = this._beta2;
+    const eps = this._epsilon;
+
+    // Compute bias correction factors
+    // (1 - β₁ᵗ) and (1 - β₂ᵗ)
+    const beta1Power = Math.pow(beta1, t);
+    const beta2Power = Math.pow(beta2, t);
+    const mCorrection = 1.0 / (1.0 - beta1Power);
+    const vCorrection = 1.0 / (1.0 - beta2Power);
+
+    const gradient = this._gradientBuffer!;
+    const weights = this._weights!;
+    const firstMoment = this._firstMoment!;
+    const secondMoment = this._secondMoment!;
+    const totalWeights = weights.length;
+
+    for (let i = 0; i < totalWeights; i++) {
+      const g = gradient[i];
+
+      // Update biased first moment: m = β₁m + (1-β₁)g
+      const m = beta1 * firstMoment[i] + (1.0 - beta1) * g;
+      firstMoment[i] = m;
+
+      // Update biased second moment: v = β₂v + (1-β₂)g²
+      const v = beta2 * secondMoment[i] + (1.0 - beta2) * g * g;
+      secondMoment[i] = v;
+
+      // Compute bias-corrected estimates
+      const mHat = m * mCorrection;
+      const vHat = v * vCorrection;
+
+      // Update weights: W -= η * m̂ / (√v̂ + ε)
+      weights[i] -= lr * mHat / (Math.sqrt(vHat) + eps);
+    }
+  }
+
+  /**
+   * Performs Adam update with precomputed gradient
+   *
+   * @param lr - Current learning rate
+   * @param gradient - Precomputed gradient
+   */
+  private _adamUpdateWithGradient(lr: number, gradient: Float64Array): void {
+    const t = this._updateCount;
+    const beta1 = this._beta1;
+    const beta2 = this._beta2;
+    const eps = this._epsilon;
+
+    const beta1Power = Math.pow(beta1, t);
+    const beta2Power = Math.pow(beta2, t);
+    const mCorrection = 1.0 / (1.0 - beta1Power);
+    const vCorrection = 1.0 / (1.0 - beta2Power);
+
+    const weights = this._weights!;
+    const firstMoment = this._firstMoment!;
+    const secondMoment = this._secondMoment!;
+    const totalWeights = weights.length;
+
+    for (let i = 0; i < totalWeights; i++) {
+      const g = gradient[i];
+
+      const m = beta1 * firstMoment[i] + (1.0 - beta1) * g;
+      firstMoment[i] = m;
+
+      const v = beta2 * secondMoment[i] + (1.0 - beta2) * g * g;
+      secondMoment[i] = v;
+
+      const mHat = m * mCorrection;
+      const vHat = v * vCorrection;
+
+      weights[i] -= lr * mHat / (Math.sqrt(vHat) + eps);
+    }
+  }
+
+  // =========================================================================
+  // PRIVATE METHODS - OUTLIER DETECTION
+  // =========================================================================
+
+  /**
+   * Detects if the current residual is an outlier
+   *
+   * Uses z-score of residual: r = (e - μ_e) / σ_e
+   * Sample is outlier if |r| > outlierThreshold for any dimension
+   *
+   * @param error - Current prediction error
+   * @returns true if outlier detected
+   */
+  private _detectOutlier(error: Float64Array): boolean {
+    const residualStats = this._residualStats!;
+
+    // Need sufficient samples for reliable outlier detection
+    if (residualStats.count < 20) {
+      return false;
+    }
+
+    const n = residualStats.count;
+    const mean = residualStats.mean;
+    const m2 = residualStats.m2;
+    const threshold = this._outlierThreshold;
+    const eps = this._epsilon;
+    const outputDim = this._outputDimension;
+
+    for (let i = 0; i < outputDim; i++) {
+      const std = Math.sqrt(m2[i] / (n - 1));
+      if (std < eps) continue;
+
+      const zScore = Math.abs(error[i] - mean[i]) / std;
+      if (zScore > threshold) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  // =========================================================================
+  // PRIVATE METHODS - ADWIN DRIFT DETECTION
+  // =========================================================================
+
+  /**
+   * Detects concept drift using ADWIN algorithm
+   *
+   * ADWIN (ADaptive WINdowing) maintains a window of recent losses and
+   * detects drift when the means of two subwindows differ significantly.
+   *
+   * Detection condition: |μ₀ - μ₁| ≥ ε_cut(δ)
+   * where ε_cut = √((2/m)·ln(2/δ)) and m = harmonic mean of subwindow sizes
+   *
+   * @param loss - Current sample loss
+   * @returns true if drift detected
+   */
+  private _detectDrift(loss: number): boolean {
+    // Add loss to ADWIN window
+    this._adwinBuckets.push({
+      total: loss,
+      variance: 0,
+      count: 1,
+    });
+    this._adwinTotal += loss;
+    this._adwinCount++;
+
+    // Compress buckets to maintain logarithmic memory
+    this._compressADWINBuckets();
+
+    // Need minimum samples for drift detection
+    if (this._adwinCount < 30) {
+      return false;
+    }
+
+    // Check for drift by testing different cut points
+    let leftTotal = 0;
+    let leftCount = 0;
+    const buckets = this._adwinBuckets;
+    const totalCount = this._adwinCount;
+    const total = this._adwinTotal;
+    const delta = this._adwinDelta;
+
+    for (let i = 0; i < buckets.length - 1; i++) {
+      const bucket = buckets[i];
+      leftTotal += bucket.total;
+      leftCount += bucket.count;
+
+      const rightTotal = total - leftTotal;
+      const rightCount = totalCount - leftCount;
+
+      if (leftCount < 5 || rightCount < 5) continue;
+
+      const leftMean = leftTotal / leftCount;
+      const rightMean = rightTotal / rightCount;
+
+      // Harmonic mean of window sizes
+      const m = (leftCount * rightCount) / (leftCount + rightCount);
+
+      // Hoeffding bound: ε_cut = √((2/m)·ln(2/δ))
+      const epsilonCut = Math.sqrt((2.0 / m) * Math.log(2.0 / delta));
+
+      if (Math.abs(leftMean - rightMean) >= epsilonCut) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Compresses ADWIN buckets using exponential histogram technique
+   * Maintains O(log(W)) buckets for window of size W
+   */
+  private _compressADWINBuckets(): void {
+    const maxBuckets = 64;
+
+    while (this._adwinBuckets.length > maxBuckets) {
+      // Merge two oldest buckets
+      const b1 = this._adwinBuckets.shift()!;
+      if (this._adwinBuckets.length > 0) {
+        const b2 = this._adwinBuckets[0];
+        b2.total += b1.total;
+        b2.count += b1.count;
+      }
+    }
+  }
+
+  /**
+   * Handles detected drift by partially resetting model state
+   *
+   * Strategy:
+   * - Shrink ADWIN window to recent data
+   * - Decay Adam momentum (keep some learning)
+   * - Partially reset loss tracking
+   */
+  private _handleDrift(): void {
+    this._driftCount++;
+
+    // Shrink ADWIN window to focus on recent data
+    while (this._adwinBuckets.length > 10) {
+      const removed = this._adwinBuckets.shift()!;
+      this._adwinTotal -= removed.total;
+      this._adwinCount -= removed.count;
+    }
+
+    // Decay Adam momentum to allow faster adaptation
+    const decayFactor = 0.5;
+    const firstMoment = this._firstMoment!;
+    const secondMoment = this._secondMoment!;
+    const len = firstMoment.length;
+
+    for (let i = 0; i < len; i++) {
+      firstMoment[i] *= decayFactor;
+      secondMoment[i] *= decayFactor;
+    }
+
+    // Partially reset loss tracking
+    this._runningLossSum *= 0.5;
+    this._runningLossCount = Math.max(
+      1,
+      Math.floor(this._runningLossCount * 0.5),
+    );
+
+    // Reset convergence flag
+    this._converged = false;
+  }
+
+  // =========================================================================
+  // PRIVATE METHODS - PREDICTION HELPERS
+  // =========================================================================
+
+  /**
+   * Computes model accuracy metric: 1/(1 + L̄)
+   *
+   * where L̄ = Σ Loss / n is the running average loss
+   *
+   * @returns Accuracy in range (0, 1]
+   */
+  private _getAccuracy(): number {
+    if (this._runningLossCount === 0) {
+      return 0;
+    }
+    const avgLoss = this._runningLossSum / this._runningLossCount;
+    return 1.0 / (1.0 + avgLoss);
+  }
+
+  /**
+   * Gets residual standard deviation for confidence intervals
+   *
+   * @returns Array of std dev for each output dimension
+   */
+  private _getResidualStd(): number[] {
+    const residualStats = this._residualStats!;
+    const outputDim = this._outputDimension;
+    const std: number[] = new Array(outputDim);
+
+    const n = residualStats.count;
+    const m2 = residualStats.m2;
+    const eps = this._epsilon;
+
+    if (n <= 1) {
       for (let i = 0; i < outputDim; i++) {
-        this.targetBuffer![i] = y[i];
+        std[i] = 1.0;
       }
-
-      // Update statistics tracker
-      this.statisticsTracker.update(this.targetBuffer!, this.predictionBuffer!);
-
-      // Process each output dimension
-      for (let o = 0; o < outputDim; o++) {
-        // STEP 3: Compute prediction error e = y - ŷ
-        const error = y[o] - this.predictionBuffer![o];
-
-        // Get current weights for this output
-        this.weightManager.getWeightsForOutput(o, this.weightBuffer!);
-
-        // STEP 4-5: Compute gradient with regularization and clipping
-        // g = -e·φ + λ·w, then clip to [-clipValue, clipValue]
-        this.gradientManager.computeGradient(
-          this.featureBuffer!,
-          error,
-          this.weightBuffer!,
-          this.config.regularization,
-          o,
-        );
-
-        // STEP 6: Update velocity with momentum v = μv + ηg
-        const deltas = this.gradientManager.updateVelocityAndGetDelta(
-          this.currentLearningRate,
-          o,
-        );
-
-        // STEP 7: Update weights w = w - v
-        for (let f = 0; f < featureCount; f++) {
-          this.weightManager.updateWeight(o, f, deltas[f]);
-        }
-      }
-
-      // Store input for extrapolation (ring buffer)
-      this.storeLastInput();
-
-      // STEP 8: Decay learning rate η = η × decay
-      this.currentLearningRate *= this.config.learningRateDecay;
+      return std;
     }
+
+    for (let i = 0; i < outputDim; i++) {
+      const variance = m2[i] / (n - 1);
+      std[i] = Math.sqrt(variance);
+      if (std[i] < eps) {
+        std[i] = eps;
+      }
+    }
+
+    return std;
   }
 
   /**
-   * Store current input in ring buffer for extrapolation.
-   * Reuses arrays to minimize allocations.
+   * Stores a recent sample for prediction
+   * Uses circular buffer to maintain fixed memory
+   *
+   * @param x - Input sample
+   * @param y - Output sample
    */
-  private storeLastInput(): void {
-    if (this.lastInputs.length >= this.maxRetainedInputs) {
-      // Reuse oldest array
-      const reused = this.lastInputs.shift()!;
-      this.matrixOps.copyTo(this.inputBuffer!, reused);
-      this.lastInputs.push(reused);
+  private _storeRecentSample(x: number[], y: number[]): void {
+    const xCopy = new Float64Array(x.length);
+    const yCopy = new Float64Array(y.length);
+
+    for (let i = 0; i < x.length; i++) {
+      xCopy[i] = x[i];
+    }
+    for (let i = 0; i < y.length; i++) {
+      yCopy[i] = y[i];
+    }
+
+    if (this._recentX.length < this._maxRecentSamples) {
+      this._recentX.push(xCopy);
+      this._recentY.push(yCopy);
     } else {
-      // Allocate new array
-      const copy = new Float64Array(this.inputDimension);
-      this.matrixOps.copyTo(this.inputBuffer!, copy);
-      this.lastInputs.push(copy);
+      this._recentX[this._recentIndex] = xCopy;
+      this._recentY[this._recentIndex] = yCopy;
+      this._recentIndex = (this._recentIndex + 1) % this._maxRecentSamples;
     }
   }
 
   /**
-   * Make predictions with confidence intervals.
+   * Gets input for prediction at given step
    *
-   * Supports two modes:
-   * 1. **Extrapolation**: Predict future steps based on trend in recent inputs
-   * 2. **Specific points**: Predict at provided input coordinates
+   * For general regression, uses the most recent input.
+   * For time series, could extrapolate (not implemented here).
    *
-   * Confidence intervals use t-distribution for small samples (n ≤ 30)
-   * and z-distribution for larger samples.
-   *
-   * @param params - Prediction parameters
-   * @param params.futureSteps - Number of future points to extrapolate
-   * @param params.inputPoints - Specific input coordinates to predict (optional)
-   * @returns PredictionResult with predictions and model metrics
-   *
-   * Time complexity: O(n_points × n_outputs × n_features)
-   * Space complexity: O(n_points × n_outputs) for results
-   *
-   * @example
-   * // Extrapolate 5 future steps
-   * const result = model.predict({ futureSteps: 5 });
-   * console.log(result.predictions[0].predicted);  // First prediction
-   * console.log(result.predictions[0].lowerBound); // Lower confidence bound
-   * console.log(result.predictions[0].upperBound); // Upper confidence bound
-   *
-   * @example
-   * // Predict at specific input points
-   * const result = model.predict({
-   *   futureSteps: 0,
-   *   inputPoints: [[5, 6], [6, 7]]
-   * });
-   *
-   * @example
-   * // Check model readiness
-   * const result = model.predict({ futureSteps: 3 });
-   * if (!result.isModelReady) {
-   *   console.log('Need more training data');
-   * }
+   * @param step - Prediction step (0 = next)
+   * @returns Input for prediction or null if unavailable
    */
-  predict(
-    params: { futureSteps: number; inputPoints?: number[][] },
-  ): PredictionResult {
-    const { futureSteps, inputPoints } = params;
-
-    // Build base result
-    const result: PredictionResult = {
-      predictions: [],
-      confidenceLevel: this.config.confidenceLevel,
-      rSquared: this.statisticsTracker.getRSquared(),
-      rmse: this.statisticsTracker.getRMSE(),
-      sampleCount: this.statisticsTracker.getSampleCount(),
-      isModelReady: this.isInitialized &&
-        this.statisticsTracker.getSampleCount() >= 2,
-    };
-
-    // Return empty result if not initialized
-    if (!this.isInitialized) {
-      return result;
+  private _getInputForPrediction(step: number): Float64Array | null {
+    if (this._recentX.length === 0) {
+      return null;
     }
 
-    // Determine points to predict
-    const pointsToPredict = this.buildPredictionPoints(
-      futureSteps,
-      inputPoints,
-    );
+    // Get most recent sample index
+    const lastIdx = this._recentX.length < this._maxRecentSamples
+      ? this._recentX.length - 1
+      : (this._recentIndex - 1 + this._maxRecentSamples) %
+        this._maxRecentSamples;
 
-    // Calculate variance and critical value for confidence intervals
-    const residualVariance = this.statisticsTracker.getResidualVariance(
-      this.featureGenerator.getFeatureCount(),
-    );
-    const criticalValue = this.predictionEngine.getCriticalValue(
-      this.statisticsTracker.getSampleCount(),
-      this.config.confidenceLevel,
-    );
+    return this._recentX[lastIdx];
+  }
 
-    // Generate predictions
-    for (let p = 0; p < pointsToPredict.length; p++) {
-      const point = pointsToPredict[p];
-      const prediction = this.predictSinglePoint(
-        point,
-        residualVariance,
-        criticalValue,
-      );
-      result.predictions.push(prediction);
+  // =========================================================================
+  // PRIVATE METHODS - UTILITIES
+  // =========================================================================
+
+  /**
+   * Generates a random number from standard normal distribution
+   * Uses Box-Muller transform with cached spare value
+   *
+   * @returns Random sample from N(0, 1)
+   */
+  private _randomNormal(): number {
+    if (this._hasSpare) {
+      this._hasSpare = false;
+      return this._spare;
     }
 
-    return result;
+    let u: number, v: number, s: number;
+
+    do {
+      u = Math.random() * 2.0 - 1.0;
+      v = Math.random() * 2.0 - 1.0;
+      s = u * u + v * v;
+    } while (s >= 1.0 || s === 0.0);
+
+    const mul = Math.sqrt(-2.0 * Math.log(s) / s);
+    this._spare = v * mul;
+    this._hasSpare = true;
+
+    return u * mul;
   }
 
   /**
-   * Build list of points to predict based on parameters.
+   * Fisher-Yates shuffle for index array
+   * In-place, O(n) time complexity
    *
-   * @param futureSteps - Number of extrapolation steps
-   * @param inputPoints - Specific points to predict
-   * @returns Array of input points
+   * @param indices - Index array to shuffle
    */
-  private buildPredictionPoints(
-    futureSteps: number,
-    inputPoints?: number[][],
-  ): number[][] {
-    const points: number[][] = [];
+  private _shuffleIndices(indices: Uint32Array): void {
+    const n = indices.length;
 
-    // Add specific input points if provided
-    if (inputPoints !== undefined && inputPoints.length > 0) {
-      for (let i = 0; i < inputPoints.length; i++) {
-        points.push(inputPoints[i]);
-      }
+    for (let i = n - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      // Swap
+      const temp = indices[i];
+      indices[i] = indices[j];
+      indices[j] = temp;
     }
-
-    // Add extrapolated points if requested
-    if (futureSteps > 0 && this.lastInputs.length > 0) {
-      const lastInput = this.lastInputs[this.lastInputs.length - 1];
-
-      // Calculate trend from recent inputs
-      const trend = new Float64Array(this.inputDimension);
-      if (this.lastInputs.length >= 2) {
-        const prevInput = this.lastInputs[this.lastInputs.length - 2];
-        for (let i = 0; i < this.inputDimension; i++) {
-          trend[i] = lastInput[i] - prevInput[i];
-        }
-      } else {
-        // Default increment if only one point
-        for (let i = 0; i < this.inputDimension; i++) {
-          trend[i] = 1;
-        }
-      }
-
-      // Generate extrapolated points
-      for (let step = 1; step <= futureSteps; step++) {
-        const futurePoint: number[] = [];
-        for (let i = 0; i < this.inputDimension; i++) {
-          futurePoint.push(lastInput[i] + trend[i] * step);
-        }
-        points.push(futurePoint);
-      }
-    }
-
-    return points;
-  }
-
-  /**
-   * Predict a single point with confidence interval.
-   *
-   * @param point - Input coordinates
-   * @param residualVariance - Estimated residual variance
-   * @param criticalValue - Critical value for confidence interval
-   * @returns SinglePrediction object
-   */
-  private predictSinglePoint(
-    point: number[],
-    residualVariance: number,
-    criticalValue: number,
-  ): SinglePrediction {
-    // Copy to input buffer
-    for (let i = 0; i < this.inputDimension; i++) {
-      this.inputBuffer![i] = point[i];
-    }
-
-    // Normalize
-    this.normalizer.normalizeInPlace(this.inputBuffer!, this.normalizedBuffer!);
-
-    // Generate features
-    this.featureGenerator.generateFeaturesInPlace(
-      this.normalizedBuffer!,
-      this.featureBuffer!,
-    );
-
-    // Compute prediction
-    this.predictionEngine.predict(
-      this.featureBuffer!,
-      this.weightManager,
-      this.predictionBuffer!,
-    );
-
-    // Calculate standard error
-    const standardError = this.predictionEngine.calculateStandardError(
-      this.featureBuffer!,
-      residualVariance,
-      this.statisticsTracker.getSampleCount(),
-    );
-
-    // Build result arrays
-    const predicted: number[] = [];
-    const lowerBound: number[] = [];
-    const upperBound: number[] = [];
-    const standardErrors: number[] = [];
-    const margin = criticalValue * standardError;
-
-    for (let o = 0; o < this.outputDimension; o++) {
-      const pred = this.predictionBuffer![o];
-      predicted.push(pred);
-      lowerBound.push(pred - margin);
-      upperBound.push(pred + margin);
-      standardErrors.push(standardError);
-    }
-
-    return {
-      predicted,
-      lowerBound,
-      upperBound,
-      standardError: standardErrors,
-    };
-  }
-
-  /**
-   * Get a summary of the current model state.
-   *
-   * @returns ModelSummary object with model statistics
-   *
-   * Time complexity: O(1)
-   * Space complexity: O(1)
-   *
-   * @example
-   * const summary = model.getModelSummary();
-   * console.log(`Initialized: ${summary.isInitialized}`);
-   * console.log(`Samples: ${summary.sampleCount}`);
-   * console.log(`R²: ${summary.rSquared.toFixed(4)}`);
-   * console.log(`RMSE: ${summary.rmse.toFixed(4)}`);
-   * console.log(`Features: ${summary.polynomialFeatureCount}`);
-   */
-  getModelSummary(): ModelSummary {
-    return {
-      isInitialized: this.isInitialized,
-      inputDimension: this.inputDimension,
-      outputDimension: this.outputDimension,
-      polynomialDegree: this.config.polynomialDegree,
-      polynomialFeatureCount: this.isInitialized
-        ? this.featureGenerator.getFeatureCount()
-        : 0,
-      sampleCount: this.statisticsTracker.getSampleCount(),
-      rSquared: this.statisticsTracker.getRSquared(),
-      rmse: this.statisticsTracker.getRMSE(),
-      normalizationEnabled: this.config.enableNormalization,
-      normalizationMethod: this.config.normalizationMethod,
-    };
-  }
-
-  /**
-   * Get current model weights.
-   *
-   * @returns 2D array of weights, shape [outputDimension][featureCount]
-   *
-   * Time complexity: O(outputDimension × featureCount)
-   * Space complexity: O(outputDimension × featureCount)
-   *
-   * @example
-   * const weights = model.getWeights();
-   * // weights[0][0] is the bias for output 0
-   * // weights[0][1] is the coefficient for x₁ in output 0
-   */
-  getWeights(): number[][] {
-    return this.weightManager.getWeights();
-  }
-
-  /**
-   * Get current normalization statistics.
-   *
-   * @returns NormalizationStats with min, max, mean, std per input dimension
-   *
-   * Time complexity: O(inputDimension)
-   * Space complexity: O(inputDimension)
-   *
-   * @example
-   * const stats = model.getNormalizationStats();
-   * console.log('Min values:', stats.min);
-   * console.log('Max values:', stats.max);
-   * console.log('Mean values:', stats.mean);
-   * console.log('Std values:', stats.std);
-   * console.log('Sample count:', stats.count);
-   */
-  getNormalizationStats(): NormalizationStats {
-    return this.normalizer.getStats();
-  }
-
-  /**
-   * Reset the model to initial state.
-   * Clears all learned weights, statistics, and normalization data.
-   * Configuration is preserved.
-   *
-   * Time complexity: O(total parameters)
-   * Space complexity: O(1) - frees existing allocations
-   *
-   * @example
-   * model.reset();
-   * // Model is now ready for fresh training
-   * // Configuration remains unchanged
-   */
-  reset(): void {
-    this.isInitialized = false;
-    this.inputDimension = 0;
-    this.outputDimension = 0;
-    this.currentLearningRate = this.config.learningRate;
-
-    // Reset all components
-    this.weightManager.reset();
-    this.gradientManager.reset();
-    this.predictionEngine.reset();
-    this.statisticsTracker.reset();
-    this.normalizer.reset();
-
-    // Release buffers
-    this.inputBuffer = null;
-    this.normalizedBuffer = null;
-    this.featureBuffer = null;
-    this.predictionBuffer = null;
-    this.targetBuffer = null;
-    this.weightBuffer = null;
-    this.lastInputs = [];
-
-    // Clear array pool
-    this.matrixOps.clearPool();
   }
 }
 
@@ -2775,36 +2278,4 @@ class MultivariatePolynomialRegression {
 // EXPORTS
 // ============================================================================
 
-export {
-  // Configuration
-  ConfigurationBuilder,
-  GradientManager,
-  type IConfiguration,
-  type IGradientManager,
-  // Component interfaces (for testing/extension)
-  type IMatrixOperations,
-  type INormalizationStrategy,
-  type INormalizer,
-  type IPolynomialFeatureGenerator,
-  type IPredictionEngine,
-  type IStatisticsTracker,
-  type IWeightManager,
-  // Concrete implementations (for advanced usage)
-  MatrixOperations,
-  MinMaxNormalizationStrategy,
-  type ModelSummary,
-  // Main class
-  MultivariatePolynomialRegression,
-  // Normalization strategies
-  NoNormalizationStrategy,
-  type NormalizationStats,
-  Normalizer,
-  PolynomialFeatureGenerator,
-  PredictionEngine,
-  // Result types
-  type PredictionResult,
-  type SinglePrediction,
-  StatisticsTracker,
-  WeightManager,
-  ZScoreNormalizationStrategy,
-};
+export default MultivariatePolynomialRegression;

@@ -1,6 +1,6 @@
-Implement a TypeScript library called "MultivariatePolynomialRegression" for multivariate polynomial regression with incremental online learning using the SGD (Stochastic Gradient Descent) algorithm.
+Model: Implement TypeScript library "MultivariatePolynomialRegression": multivariate polynomial regression with incremental online learning, Adam optimizer, z-score normalization.
 
-OPTIMIZATION REQUIREMENTS:
+PERFORMANCE:
 - Minimize memory allocations by reusing arrays and objects wherever possible
 - Use typed arrays (Float64Array) for all numerical computations
 - Avoid creating intermediate arrays in hot paths
@@ -14,114 +14,45 @@ OPTIMIZATION REQUIREMENTS:
 - Use iterative methods to prevent memory overallocation
 - Write code that is highly CPU-optimized as well
 
-OBJECT-ORIENTED DESIGN REQUIREMENTS:
-- Create separate classes for: Matrix operations, Normalization, PolynomialFeatureGenerator, GradientManager, WeightManager, PredictionEngine, StatisticsTracker
-- Use interfaces for all public contracts
-- Implement dependency injection for testability
-- Apply Single Responsibility Principle strictly
-- Use private fields and methods appropriately
-- Implement the Strategy pattern for normalization methods
-- Use the Builder pattern for configuration
-- Encapsulate all internal state
+DESIGN:
+- Full numerical stability; OOP with interfaces for public contracts
+- Private field encapsulation; JSDoc (@param, @returns, @example)
+- Inline math formula docs; normalize inputs; track running average loss for accuracy
 
-DOCUMENTATION REQUIREMENTS:
-- Add JSDoc comments to every class, method, property, and interface
-- Include @param, @returns, @throws, @example tags where applicable
-- Document time and space complexity for all public methods
-- Add inline comments explaining the mathematical formulas used
-- Document the SGD algorithm steps clearly
-- Include usage examples in class-level documentation
+CONFIG (defaults):
+polynomialDegree: 2 (1-10), learningRate: 0.001, warmupSteps: 100, totalSteps: 10000, beta1: 0.9, beta2: 0.999, epsilon: 1e-8, regularizationStrength: 1e-4, batchSize: 32, convergenceThreshold: 1e-6, outlierThreshold: 3.0, adwinDelta: 0.002
 
-CONFIGURATION INTERFACE:
-- polynomialDegree: number (default: 2, minimum: 1)
-- enableNormalization: boolean (default: true)
-- normalizationMethod: 'none' | 'min-max' | 'z-score' (default: 'min-max')
-- learningRate: number (default: 0.01, range: (0, 1])
-- learningRateDecay: number (default: 0.999, range: (0, 1])
-- momentum: number (default: 0.9, range: [0, 1))
-- regularization: number (default: 1e-6)
-- gradientClipValue: number (default: 1.0, range: (0, ∞))
-- confidenceLevel: number (default: 0.95, range: (0, 1))
-- batchSize: number (default: 1, minimum: 1)
+API:
+fitOnline({ xCoordinates: number[][], yCoordinates: number[][] }): FitResult → Incremental Adam, Welford's z-score, L2 reg, outlier downweighting, ADWIN drift detection
+fitBatch({ xCoordinates: number[][], yCoordinates: number[][], epochs?: number }): BatchFitResult → Mini-batch GD, shuffling, early stopping
+predict(futureSteps: number): PredictionResult → Predictions
+getModelSummary(): ModelSummary | getWeights(): WeightInfo | getNormalizationStats(): NormalizationStats | reset(): void
 
-MAIN CLASS API:
+TYPES:
+FitResult { loss, gradientNorm, effectiveLearningRate, isOutlier, converged, sampleIndex, driftDetected }
+BatchFitResult { finalLoss, lossHistory: number[], converged, epochsCompleted, totalSamplesProcessed }
+PredictionResult { predictions: SinglePrediction[], accuracy, sampleCount, isModelReady }
+SinglePrediction { predicted, lowerBound, upperBound, standardError: number[] }
+WeightInfo { weights, firstMoment, secondMoment: number[][], updateCount }
+NormalizationStats { inputMean, inputStd, outputMean, outputStd: number[], count }
+ModelSummary { isInitialized, inputDimension, outputDimension, polynomialDegree, polynomialFeatureCount, sampleCount, accuracy, converged, effectiveLearningRate, driftCount }
 
-fitOnline(params: { xCoordinates: number[][], yCoordinates: number[][] }): void
-- Incrementally trains the model using SGD algorithm
-- Updates normalization statistics dynamically
-- Generates polynomial features from input
-- Computes gradients and updates weights
+ALGORITHMS:
 
-predict(params: { futureSteps: number, inputPoints?: number[][] }): PredictionResult
-- Returns predictions with confidence intervals
-- Supports both extrapolation (futureSteps) and specific input points
-- Calculates standard errors using prediction variance estimation
+Adam + Cosine Warmup:
+1. Normalize: x̃ = (x - μ)/(σ + ε)
+2. Polynomial features φ: monomials ≤ degree d, graded lex order, count = C(n+d,d)
+3. Forward: ŷ = W·φ, Loss = (1/2n)Σ‖y - ŷ‖²
+4. Gradient: g = -(1/n)Σ(e ⊗ φ) + λW
+5. LR: warmup → cosine decay
+6. Update: m = β₁m + (1-β₁)g, v = β₂v + (1-β₂)g², W -= η(m/(1-β₁ᵗ))/(√(v/(1-β₂ᵗ)) + ε)
 
-getModelSummary(): ModelSummary
-- Returns: isInitialized, inputDimension, outputDimension, polynomialDegree, polynomialFeatureCount, sampleCount, rSquared, rmse, normalizationEnabled, normalizationMethod
+Welford: δ = x - μ, μ += δ/n, M₂ += δ(x - μ), σ² = M₂/(n-1) → inputs (normalize)
 
-getWeights(): number[][]
-- Returns current weight matrix
+Accuracy: track running average loss L̄ = ΣLoss/n; accuracy = 1/(1 + L̄)
 
-getNormalizationStats(): NormalizationStats
-- Returns: min, max, mean, std, count arrays
+ADWIN Drift: adaptive error window; detect drift when |μ₀ - μ₁| ≥ εcut(δ); shrink window; reset stats on drift
 
-reset(): void
-- Clears all state and reinitializes
+Outliers: r = (y - ŷ)/σ; |r| > threshold → downweight 0.1×
 
-RETURN TYPES:
-
-interface PredictionResult {
-  predictions: SinglePrediction[]
-  confidenceLevel: number
-  rSquared: number
-  rmse: number
-  sampleCount: number
-  isModelReady: boolean
-}
-
-interface SinglePrediction {
-  predicted: number[]
-  lowerBound: number[]
-  upperBound: number[]
-  standardError: number[]
-}
-
-SGD ALGORITHM IMPLEMENTATION:
-For each new sample (x, y):
-
-1. Generate polynomial features: φ = polynomial_features(normalize(x))
-2. Compute prediction: ŷ = wᵀ·φ
-3. Compute prediction error: e = y - ŷ
-4. Compute gradient with L2 regularization: g = -e·φ + λ·w
-5. Apply gradient clipping: g = clip(g, -clipValue, clipValue)
-6. Update velocity with momentum: v = μ·v + η·g
-7. Update weights: w = w - v
-8. Decay learning rate: η = η × decay
-
-POLYNOMIAL FEATURE GENERATION:
-For degree d and input dimension n, generate all combinations of features up to total degree d.
-Example for degree 2, input [x1, x2]: [1, x1, x2, x1², x1·x2, x2²]
-
-NORMALIZATION:
-- min-max: (x - min) / (max - min), output range [0, 1]
-- z-score: (x - mean) / std
-- Track running statistics incrementally without storing all data
-
-CONFIDENCE INTERVALS:
-- Use t-distribution critical values for small samples
-- Use z-distribution for large samples (n > 30)
-- Standard error: estimated from residual variance and feature statistics
-- Interval: predicted ± critical_value × standard_error
-
-METRICS:
-- R-squared: 1 - (SS_res / SS_tot), track incrementally
-- RMSE: sqrt(mean squared error), track incrementally
-
-NUMERICAL STABILITY:
-- Apply gradient clipping to prevent exploding gradients
-- Handle edge cases: zero variance, insufficient data
-- Clamp normalized values to prevent extreme outliers
-- Use weight decay for regularization
-
-Export the main class as: MultivariatePolynomialRegression
+Export: MultivariatePolynomialRegression
