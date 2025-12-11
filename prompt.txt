@@ -1,0 +1,118 @@
+Model: Implement a TypeScript library called "MultivariatePolynomialRegression" for multivariate polynomial regression with incremental online learning using the Recursive Least Squares (RLS) algorithm.
+
+OPTIMIZATION REQUIREMENTS:
+- Minimize memory allocations by reusing arrays and objects wherever possible
+- Use typed arrays (Float64Array) for all numerical computations
+- Avoid creating intermediate arrays in hot paths
+- Implement in-place matrix operations
+- Use object pooling for frequently created objects
+- Minimize garbage collection pressure
+- Cache computed values that are reused
+- Use efficient loop structures (avoid forEach, map, reduce in critical paths)
+- Preallocate buffers for polynomial feature generation
+- Implement lazy initialization where appropriate
+
+OBJECT-ORIENTED DESIGN REQUIREMENTS:
+- Create separate classes for: Matrix operations, Normalization, PolynomialFeatureGenerator, CovarianceManager, WeightManager, PredictionEngine, StatisticsTracker
+- Use interfaces for all public contracts
+- Implement dependency injection for testability
+- Apply Single Responsibility Principle strictly
+- Use private fields and methods appropriately
+- Implement the Strategy pattern for normalization methods
+- Use the Builder pattern for configuration
+- Encapsulate all internal state
+
+DOCUMENTATION REQUIREMENTS:
+- Add JSDoc comments to every class, method, property, and interface
+- Include @param, @returns, @throws, @example tags where applicable
+- Document time and space complexity for all public methods
+- Add inline comments explaining the mathematical formulas used
+- Document the RLS algorithm steps clearly
+- Include usage examples in class-level documentation
+
+CONFIGURATION INTERFACE:
+- polynomialDegree: number (default: 2, minimum: 1)
+- enableNormalization: boolean (default: true)
+- normalizationMethod: 'none' | 'min-max' | 'z-score' (default: 'min-max')
+- forgettingFactor: number (default: 0.99, range: (0, 1])
+- initialCovariance: number (default: 1000)
+- regularization: number (default: 1e-6)
+- confidenceLevel: number (default: 0.95, range: (0, 1))
+
+MAIN CLASS API:
+
+fitOnline(params: { xCoordinates: number[][], yCoordinates: number[][] }): void
+- Incrementally trains the model using RLS algorithm
+- Updates normalization statistics dynamically
+- Generates polynomial features from input
+- Updates covariance matrix and weights
+
+predict(params: { futureSteps: number, inputPoints?: number[][] }): PredictionResult
+- Returns predictions with confidence intervals
+- Supports both extrapolation (futureSteps) and specific input points
+- Calculates standard errors using covariance matrix
+
+getModelSummary(): ModelSummary
+- Returns: isInitialized, inputDimension, outputDimension, polynomialDegree, polynomialFeatureCount, sampleCount, rSquared, rmse, normalizationEnabled, normalizationMethod
+
+getWeights(): number[][]
+- Returns current weight matrix
+
+getNormalizationStats(): NormalizationStats
+- Returns: min, max, mean, std, count arrays
+
+reset(): void
+- Clears all state and reinitializes
+
+RETURN TYPES:
+
+interface PredictionResult {
+  predictions: SinglePrediction[]
+  confidenceLevel: number
+  rSquared: number
+  rmse: number
+  sampleCount: number
+  isModelReady: boolean
+}
+
+interface SinglePrediction {
+  predicted: number[]
+  lowerBound: number[]
+  upperBound: number[]
+  standardError: number[]
+}
+
+RLS ALGORITHM IMPLEMENTATION:
+For each new sample (x, y):
+1. Generate polynomial features: φ = polynomial_features(normalize(x))
+2. Compute gain vector: k = P·φ / (λ + φᵀ·P·φ)
+3. Compute prediction error: e = y - φᵀ·w
+4. Update weights: w = w + k·e
+5. Update covariance: P = (P - k·φᵀ·P) / λ
+6. Apply regularization to P diagonal
+
+POLYNOMIAL FEATURE GENERATION:
+For degree d and input dimension n, generate all combinations of features up to total degree d.
+Example for degree 2, input [x1, x2]: [1, x1, x2, x1², x1·x2, x2²]
+
+NORMALIZATION:
+- min-max: (x - min) / (max - min), output range [0, 1]
+- z-score: (x - mean) / std
+- Track running statistics incrementally without storing all data
+
+CONFIDENCE INTERVALS:
+- Use t-distribution critical values for small samples
+- Use z-distribution for large samples (n > 30)
+- Standard error: sqrt(φᵀ·P·φ)
+- Interval: predicted ± critical_value × standard_error
+
+METRICS:
+- R-squared: 1 - (SS_res / SS_tot), track incrementally
+- RMSE: sqrt(mean squared error), track incrementally
+
+NUMERICAL STABILITY:
+- Add regularization to covariance diagonal periodically
+- Handle edge cases: zero variance, insufficient data, singular matrices
+- Clamp normalized values to prevent extreme outliers
+
+Export the main class as: MultivariatePolynomialRegression
