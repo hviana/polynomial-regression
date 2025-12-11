@@ -12,6 +12,7 @@ OPTIMIZATION REQUIREMENTS:
 - Preallocate buffers for polynomial feature generation
 - Implement lazy initialization where appropriate
 - Use iterative methods to prevent memory overallocation
+- Write code that is highly CPU-optimized as well
 
 OBJECT-ORIENTED DESIGN REQUIREMENTS:
 - Create separate classes for: Matrix operations, Normalization, PolynomialFeatureGenerator, CovarianceManager, WeightManager, PredictionEngine, StatisticsTracker
