@@ -1,4 +1,4 @@
-Implement a TypeScript library called "MultivariatePolynomialRegression" for multivariate polynomial regression with incremental online learning using the Recursive Least Squares (RLS) algorithm.
+Implement a TypeScript library called "MultivariatePolynomialRegression" for multivariate polynomial regression with incremental online learning using the GD/SGD algorithm.
 
 OPTIMIZATION REQUIREMENTS:
 - Minimize memory allocations by reusing arrays and objects wherever possible
@@ -29,7 +29,7 @@ DOCUMENTATION REQUIREMENTS:
 - Include @param, @returns, @throws, @example tags where applicable
 - Document time and space complexity for all public methods
 - Add inline comments explaining the mathematical formulas used
-- Document the RLS algorithm steps clearly
+- Document the GD/SGD algorithm steps clearly
 - Include usage examples in class-level documentation
 
 CONFIGURATION INTERFACE:
@@ -44,7 +44,7 @@ CONFIGURATION INTERFACE:
 MAIN CLASS API:
 
 fitOnline(params: { xCoordinates: number[][], yCoordinates: number[][] }): void
-- Incrementally trains the model using RLS algorithm
+- Incrementally trains the model using GD/SGD algorithm
 - Updates normalization statistics dynamically
 - Generates polynomial features from input
 - Updates covariance matrix and weights
@@ -84,14 +84,15 @@ interface SinglePrediction {
   standardError: number[]
 }
 
-RLS ALGORITHM IMPLEMENTATION:
+GD / SGD ALGORITHM IMPLEMENTATION
 For each new sample (x, y):
+
 1. Generate polynomial features: φ = polynomial_features(normalize(x))
-2. Compute gain vector: k = P·φ / (λ + φᵀ·P·φ)
-3. Compute prediction error: e = y - φᵀ·w
-4. Update weights: w = w + k·e
-5. Update covariance: P = (P - k·φᵀ·P) / λ
-6. Apply regularization to P diagonal
+2. Compute prediction: ŷ = wᵀ·φ
+3. Compute prediction error: e = y - ŷ
+4. Compute gradient (with optional L2 regularization): g = -e·φ + λ·w
+5. Update weights with learning rate η: w = w - η·g
+6. Optionally adapt η over time (e.g., decay schedule) and/or apply gradient clipping
 
 POLYNOMIAL FEATURE GENERATION:
 For degree d and input dimension n, generate all combinations of features up to total degree d.
