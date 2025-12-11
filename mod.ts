@@ -1384,7 +1384,12 @@ export class MultivariatePolynomialRegression {
     // where ⊗ is outer product
 
     // First: P = P - k * Pphi' (subtract scaled outer product)
-    MatrixOperations.subtractScaledOuterProductInPlace(P, k, Pphi, 1);
+    MatrixOperations.subtractScaledOuterProductInPlace(
+      P,
+      k as any,
+      Pphi as any,
+      1,
+    );
 
     // Second: P = P / λ (scale by inverse of forgetting factor)
     const invLambda = 1 / lambda;
