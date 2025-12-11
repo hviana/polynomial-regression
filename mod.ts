@@ -1498,6 +1498,11 @@ class StatisticsTracker implements IStatisticsTracker {
   /** Output dimension */
   private outputDimension: number = 0;
 
+  // new fields for EMA-based R²
+  private readonly emaDecay: number = 0.99;
+  private emaSqError: number = 0;
+  private emaInitialized: boolean = false;
+
   /**
    * Initialize tracker for given output dimension.
    *
@@ -1521,6 +1526,8 @@ class StatisticsTracker implements IStatisticsTracker {
     this.ssRes = 0;
     this.ssTot = 0;
     this.sumSquaredError = 0;
+    this.emaSqError = 0; // Add this
+    this.emaInitialized = false; // Add this
     if (this.yMean !== null) {
       for (let i = 0; i < this.outputDimension; i++) {
         this.yMean[i] = 0;
@@ -1543,6 +1550,7 @@ class StatisticsTracker implements IStatisticsTracker {
    * Time complexity: O(outputDimension)
    * Space complexity: O(1)
    */
+
   update(actual: Float64Array, predicted: Float64Array): void {
     if (this.yMean === null || this.yM2 === null) {
       return;
@@ -1551,7 +1559,7 @@ class StatisticsTracker implements IStatisticsTracker {
     this.sampleCount++;
     const n = this.sampleCount;
 
-    // Recalculate SS_tot using M2 accumulators
+    let sampleSqError = 0; // Add this to track per-sample error
     this.ssTot = 0;
 
     for (let i = 0; i < this.outputDimension; i++) {
@@ -1559,20 +1567,25 @@ class StatisticsTracker implements IStatisticsTracker {
       const yHat = predicted[i];
       const error = y - yHat;
 
-      // Update sum of squared residuals: SS_res = Σ(y - ŷ)²
       this.ssRes += error * error;
-
-      // Track for RMSE calculation
+      sampleSqError += error * error; // Add this
       this.sumSquaredError += error * error;
 
-      // Welford's algorithm for running mean and M2
       const delta = y - this.yMean[i];
       this.yMean[i] += delta / n;
       const delta2 = y - this.yMean[i];
       this.yM2[i] += delta * delta2;
 
-      // Accumulate SS_tot = Σ(y - ȳ)²
       this.ssTot += this.yM2[i];
+    }
+
+    // Add EMA update
+    if (!this.emaInitialized) {
+      this.emaSqError = sampleSqError;
+      this.emaInitialized = true;
+    } else {
+      this.emaSqError = this.emaDecay * this.emaSqError +
+        (1 - this.emaDecay) * sampleSqError;
     }
   }
 
@@ -1594,15 +1607,13 @@ class StatisticsTracker implements IStatisticsTracker {
       return 0;
     }
 
-    const rSquared = 1 - (this.ssRes / this.ssTot);
+    // Use EMA-based R²: compare recent errors to overall variance
+    const avgVariancePerSample = this.ssTot / this.sampleCount;
 
-    // Clamp to [0, 1] - can go negative if model is worse than mean
-    if (rSquared < 0) {
-      return 0;
-    }
-    if (rSquared > 1) {
-      return 1;
-    }
+    const rSquared = 1 - (this.emaSqError / avgVariancePerSample);
+
+    if (rSquared < 0) return 0;
+    if (rSquared > 1) return 1;
     return rSquared;
   }
 
