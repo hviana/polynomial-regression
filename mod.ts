@@ -1912,7 +1912,7 @@ class MultivariatePolynomialRegression {
       currentRaw[0] += 1;
 
       // Normalize and copy
-      this._normalizeInput(currentRaw, normalized);
+      this._normalizeInput(currentRaw as any, normalized);
       points.push(new Float64Array(normalized));
     }
 
@@ -2016,13 +2016,13 @@ class MultivariatePolynomialRegression {
 // ============================================================================
 
 export {
-  FitOnlineParams,
-  ModelConfiguration,
-  ModelSummary,
+  type FitOnlineParams,
+  type ModelConfiguration,
+  type ModelSummary,
   MultivariatePolynomialRegression,
-  NormalizationMethod,
-  NormalizationStats,
-  PredictionResult,
-  PredictParams,
-  SinglePrediction,
+  type NormalizationMethod,
+  type NormalizationStats,
+  type PredictionResult,
+  type PredictParams,
+  type SinglePrediction,
 };
