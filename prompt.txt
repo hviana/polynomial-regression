@@ -1,4 +1,4 @@
-Implement a TypeScript library called "MultivariatePolynomialRegression" for multivariate polynomial regression with incremental online learning using the GD/SGD algorithm.
+Implement a TypeScript library called "MultivariatePolynomialRegression" for multivariate polynomial regression with incremental online learning using the SGD (Stochastic Gradient Descent) algorithm.
 
 OPTIMIZATION REQUIREMENTS:
 - Minimize memory allocations by reusing arrays and objects wherever possible
@@ -15,7 +15,7 @@ OPTIMIZATION REQUIREMENTS:
 - Write code that is highly CPU-optimized as well
 
 OBJECT-ORIENTED DESIGN REQUIREMENTS:
-- Create separate classes for: Matrix operations, Normalization, PolynomialFeatureGenerator, CovarianceManager, WeightManager, PredictionEngine, StatisticsTracker
+- Create separate classes for: Matrix operations, Normalization, PolynomialFeatureGenerator, GradientManager, WeightManager, PredictionEngine, StatisticsTracker
 - Use interfaces for all public contracts
 - Implement dependency injection for testability
 - Apply Single Responsibility Principle strictly
@@ -29,30 +29,33 @@ DOCUMENTATION REQUIREMENTS:
 - Include @param, @returns, @throws, @example tags where applicable
 - Document time and space complexity for all public methods
 - Add inline comments explaining the mathematical formulas used
-- Document the GD/SGD algorithm steps clearly
+- Document the SGD algorithm steps clearly
 - Include usage examples in class-level documentation
 
 CONFIGURATION INTERFACE:
 - polynomialDegree: number (default: 2, minimum: 1)
 - enableNormalization: boolean (default: true)
 - normalizationMethod: 'none' | 'min-max' | 'z-score' (default: 'min-max')
-- forgettingFactor: number (default: 0.99, range: (0, 1])
-- initialCovariance: number (default: 1000)
+- learningRate: number (default: 0.01, range: (0, 1])
+- learningRateDecay: number (default: 0.999, range: (0, 1])
+- momentum: number (default: 0.9, range: [0, 1))
 - regularization: number (default: 1e-6)
+- gradientClipValue: number (default: 1.0, range: (0, ∞))
 - confidenceLevel: number (default: 0.95, range: (0, 1))
+- batchSize: number (default: 1, minimum: 1)
 
 MAIN CLASS API:
 
 fitOnline(params: { xCoordinates: number[][], yCoordinates: number[][] }): void
-- Incrementally trains the model using GD/SGD algorithm
+- Incrementally trains the model using SGD algorithm
 - Updates normalization statistics dynamically
 - Generates polynomial features from input
-- Updates covariance matrix and weights
+- Computes gradients and updates weights
 
 predict(params: { futureSteps: number, inputPoints?: number[][] }): PredictionResult
 - Returns predictions with confidence intervals
 - Supports both extrapolation (futureSteps) and specific input points
-- Calculates standard errors using covariance matrix
+- Calculates standard errors using prediction variance estimation
 
 getModelSummary(): ModelSummary
 - Returns: isInitialized, inputDimension, outputDimension, polynomialDegree, polynomialFeatureCount, sampleCount, rSquared, rmse, normalizationEnabled, normalizationMethod
@@ -84,15 +87,17 @@ interface SinglePrediction {
   standardError: number[]
 }
 
-GD / SGD ALGORITHM IMPLEMENTATION
+SGD ALGORITHM IMPLEMENTATION:
 For each new sample (x, y):
 
 1. Generate polynomial features: φ = polynomial_features(normalize(x))
 2. Compute prediction: ŷ = wᵀ·φ
 3. Compute prediction error: e = y - ŷ
-4. Compute gradient (with optional L2 regularization): g = -e·φ + λ·w
-5. Update weights with learning rate η: w = w - η·g
-6. Optionally adapt η over time (e.g., decay schedule) and/or apply gradient clipping
+4. Compute gradient with L2 regularization: g = -e·φ + λ·w
+5. Apply gradient clipping: g = clip(g, -clipValue, clipValue)
+6. Update velocity with momentum: v = μ·v + η·g
+7. Update weights: w = w - v
+8. Decay learning rate: η = η × decay
 
 POLYNOMIAL FEATURE GENERATION:
 For degree d and input dimension n, generate all combinations of features up to total degree d.
@@ -106,7 +111,7 @@ NORMALIZATION:
 CONFIDENCE INTERVALS:
 - Use t-distribution critical values for small samples
 - Use z-distribution for large samples (n > 30)
-- Standard error: sqrt(φᵀ·P·φ)
+- Standard error: estimated from residual variance and feature statistics
 - Interval: predicted ± critical_value × standard_error
 
 METRICS:
@@ -114,8 +119,9 @@ METRICS:
 - RMSE: sqrt(mean squared error), track incrementally
 
 NUMERICAL STABILITY:
-- Add regularization to covariance diagonal periodically
-- Handle edge cases: zero variance, insufficient data, singular matrices
+- Apply gradient clipping to prevent exploding gradients
+- Handle edge cases: zero variance, insufficient data
 - Clamp normalized values to prevent extreme outliers
+- Use weight decay for regularization
 
 Export the main class as: MultivariatePolynomialRegression
