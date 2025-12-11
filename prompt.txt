@@ -1,4 +1,4 @@
-Model: Implement a TypeScript library called "MultivariatePolynomialRegression" for multivariate polynomial regression with incremental online learning using the Recursive Least Squares (RLS) algorithm.
+Implement a TypeScript library called "MultivariatePolynomialRegression" for multivariate polynomial regression with incremental online learning using the Recursive Least Squares (RLS) algorithm.
 
 OPTIMIZATION REQUIREMENTS:
 - Minimize memory allocations by reusing arrays and objects wherever possible
@@ -11,6 +11,7 @@ OPTIMIZATION REQUIREMENTS:
 - Use efficient loop structures (avoid forEach, map, reduce in critical paths)
 - Preallocate buffers for polynomial feature generation
 - Implement lazy initialization where appropriate
+- Use iterative methods to prevent memory overallocation
 
 OBJECT-ORIENTED DESIGN REQUIREMENTS:
 - Create separate classes for: Matrix operations, Normalization, PolynomialFeatureGenerator, CovarianceManager, WeightManager, PredictionEngine, StatisticsTracker
