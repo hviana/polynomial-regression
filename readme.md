@@ -1,3 +1,45 @@
+> ## ⚠️🚨 IMPORTANT: THIS LIBRARY HAS BEEN DEPRECATED 🚨⚠️
+> 
+> ---
+> 
+> ### 🔄 This library has been replaced by a newer, more powerful version!
+> 
+> <table>
+> <tr>
+> <td>
+> 
+> ### ❌ OLD (This Repository)
+> `@hviana/polynomial-regression`
+> 
+> </td>
+> <td>
+> 
+> ### ✅ NEW (Use This Instead)
+> `@hviana/multivariate-convolutional-regression`
+> 
+> </td>
+> </tr>
+> </table>
+> 
+> ---
+> 
+> ### 📦 Migration Links
+> 
+> | Platform | Link |
+> |----------|------|
+> | 🌐 **JSR Registry** | 👉 [https://jsr.io/@hviana/multivariate-convolutional-regression](https://jsr.io/@hviana/multivariate-convolutional-regression) |
+> | 🐙 **GitHub Repository** | 👉 [https://github.com/hviana/multivariate-convolutional-regression](https://github.com/hviana/multivariate-convolutional-regression) |
+> 
+> ---
+> 
+> ### 🛑 Please migrate to the new library for:
+> - ✨ New features and improvements
+> - 🐛 Bug fixes and security updates
+> - 📚 Better documentation
+> - 🔧 Continued maintenance and support
+> 
+> ---
+
 Model: # 🚀 Multivariate Polynomial Regression
 
 **A high-performance TypeScript library for multivariate polynomial regression

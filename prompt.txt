@@ -1,4 +1,4 @@
-Model: Implement TypeScript library "MultivariatePolynomialRegression": multivariate polynomial regression with incremental online learning, Adam optimizer, z-score normalization.
+Implement TypeScript library "ConvolutionalRegression": convolutional neural network for multivariate regression with incremental online learning, Adam optimizer, z-score normalization.
 
 PERFORMANCE:
 - Minimize memory allocations by reusing arrays and objects wherever possible
@@ -9,7 +9,7 @@ PERFORMANCE:
 - Minimize garbage collection pressure
 - Cache computed values that are reused
 - Use efficient loop structures (avoid forEach, map, reduce in critical paths)
-- Preallocate buffers for polynomial feature generation
+- Preallocate buffers for convolution operations and layer activations
 - Implement lazy initialization where appropriate
 - Use iterative methods to prevent memory overallocation
 - Write code that is highly CPU-optimized as well
@@ -20,7 +20,7 @@ DESIGN:
 - Inline math formula docs; normalize inputs; track running average loss for accuracy
 
 CONFIG (defaults):
-polynomialDegree: 2 (1-10), learningRate: 0.001, warmupSteps: 100, totalSteps: 10000, beta1: 0.9, beta2: 0.999, epsilon: 1e-8, regularizationStrength: 1e-4, batchSize: 32, convergenceThreshold: 1e-6, outlierThreshold: 3.0, adwinDelta: 0.002
+hiddenLayers: 2 (1-10), convolutionsPerLayer: 32 (1-256), kernelSize: 3, learningRate: 0.001, warmupSteps: 100, totalSteps: 10000, beta1: 0.9, beta2: 0.999, epsilon: 1e-8, regularizationStrength: 1e-4, batchSize: 32, convergenceThreshold: 1e-6, outlierThreshold: 3.0, adwinDelta: 0.002
 
 API:
 fitOnline({ xCoordinates: number[][], yCoordinates: number[][] }): FitResult → Incremental Adam, Welford's z-score, L2 reg, outlier downweighting, ADWIN drift detection
@@ -33,17 +33,23 @@ FitResult { loss, gradientNorm, effectiveLearningRate, isOutlier, converged, sam
 BatchFitResult { finalLoss, lossHistory: number[], converged, epochsCompleted, totalSamplesProcessed }
 PredictionResult { predictions: SinglePrediction[], accuracy, sampleCount, isModelReady }
 SinglePrediction { predicted, lowerBound, upperBound, standardError: number[] }
-WeightInfo { weights, firstMoment, secondMoment: number[][], updateCount }
+WeightInfo { kernels, biases, firstMoment, secondMoment: number[][][], updateCount }
 NormalizationStats { inputMean, inputStd, outputMean, outputStd: number[], count }
-ModelSummary { isInitialized, inputDimension, outputDimension, polynomialDegree, polynomialFeatureCount, sampleCount, accuracy, converged, effectiveLearningRate, driftCount }
+ModelSummary { isInitialized, inputDimension, outputDimension, hiddenLayers, convolutionsPerLayer, kernelSize, totalParameters, sampleCount, accuracy, converged, effectiveLearningRate, driftCount }
 
 ALGORITHMS:
 
+Convolutional Network Architecture:
+1. Auto-detect: inputDim = xCoordinates[0].length, outputDim = yCoordinates[0].length
+2. Structure: Input(inputDim) → [Conv1D(convolutionsPerLayer, kernelSize, padding='same') → Activation]×hiddenLayers → Flatten → Dense(outputDim)
+3. Conv1D: y[c,i] = Σₖ Σⱼ(W[c,k,j] · x[k,i+j-pad]) + b[c], same padding preserves spatial dims
+4. Activation: ReLU(x) = max(0, x), applied element-wise
+
 Adam + Cosine Warmup:
 1. Normalize: x̃ = (x - μ)/(σ + ε)
-2. Polynomial features φ: monomials ≤ degree d, graded lex order, count = C(n+d,d)
-3. Forward: ŷ = W·φ, Loss = (1/2n)Σ‖y - ŷ‖²
-4. Gradient: g = -(1/n)Σ(e ⊗ φ) + λW
+2. Forward: propagate through conv layers, cache activations for backprop
+3. Loss: L = (1/2n)Σ‖y - ŷ‖² + (λ/2)Σ‖W‖²
+4. Backprop: ∂L/∂W via chain rule, ∂Conv: rotate kernel, convolve with upstream gradient
 5. LR: warmup → cosine decay
 6. Update: m = β₁m + (1-β₁)g, v = β₂v + (1-β₂)g², W -= η(m/(1-β₁ᵗ))/(√(v/(1-β₂ᵗ)) + ε)
 
@@ -55,4 +61,4 @@ ADWIN Drift: adaptive error window; detect drift when |μ₀ - μ₁| ≥ εcut(
 
 Outliers: r = (y - ŷ)/σ; |r| > threshold → downweight 0.1×
 
-Export: MultivariatePolynomialRegression
+Export: ConvolutionalRegression
