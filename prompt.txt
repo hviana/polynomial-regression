@@ -1,64 +1,313 @@
-Implement TypeScript library "ConvolutionalRegression": convolutional neural network for multivariate regression with incremental online learning, Adam optimizer, z-score normalization.
+Implement TypeScript library "FusionTemporalTransformerRegression": a Fusion Temporal Transformer neural network for multivariate regression with incremental online learning, Adam optimizer, and Welford z-score normalization.
 
-PERFORMANCE:
-- Minimize memory allocations by reusing arrays and objects wherever possible
-- Use typed arrays (Float64Array) for all numerical computations
-- Avoid creating intermediate arrays in hot paths
-- Implement in-place matrix operations
-- Use object pooling for frequently created objects
-- Minimize garbage collection pressure
-- Cache computed values that are reused
-- Use efficient loop structures (avoid forEach, map, reduce in critical paths)
-- Preallocate buffers for convolution operations and layer activations
-- Implement lazy initialization where appropriate
-- Use iterative methods to prevent memory overallocation
-- Write code that is highly CPU-optimized as well
+SCOPE AND GOALS
+Build a single self-contained TypeScript library (no heavy runtime deps) that trains online (one sample at a time) and predicts multiple steps ahead.
+Primary use-case is tight CPU and memory environments, so the implementation must be deterministic, allocation-free in hot paths, and numerically stable.
 
-DESIGN:
-- Full numerical stability; OOP with interfaces for public contracts
-- Private field encapsulation; JSDoc (@param, @returns, @example)
-- Inline math formula docs; normalize inputs; track running average loss for accuracy
+PERFORMANCE PRINCIPLES (HARD REQUIREMENTS)
+Fixed-size memory: preallocate all parameter, gradient, optimizer-moment, and scratch buffers once at initialization; never grow during training.
+Bounded attention memory: do not allocate O(seqLen^2) attention score/weight matrices; implement streaming or tiled attention using fixed reusable blocks.
+Typed-array only core: all tensors live in contiguous Float64Array slabs in row-major layout; expose zero-copy views via (data, offset, shape, strides).
+No hot-path allocations: forward(), backward(), fitOnline() must allocate 0 arrays/objects per call; all temporaries come from TensorArena and BufferPool.
+Strict reuse policy: rent scratch buffers by size class, return immediately; no new Float64Array inside inner loops.
+In-place and fused kernels: prefer fused ops (matmul+bias+activation, softmax+mask, residual+dropout) and in-place transforms to avoid intermediates.
+Deterministic caps: enforce maxSequenceLength and maxBatch=1; if inputs exceed limits, truncate/stride rather than allocating more memory.
+Minimal training tape: store only what backprop strictly needs (offsets and compact stats); recompute cheap intermediates instead of caching large activations.
+Tight loops only: classic for-loops with manual indexing; avoid map/reduce/forEach, closures, and polymorphic dispatch in inner loops.
+Cache once, reuse forever: positional encodings, masks, index maps, and shape metadata computed once and reused; lazy init allowed, but never re-init.
+GC guardrails: pool small objects (TensorView, ForwardContext shells, ADWIN nodes); keep debug and verbose metrics off by default.
 
-CONFIG (defaults):
-hiddenLayers: 2 (1-10), convolutionsPerLayer: 32 (1-256), kernelSize: 3, learningRate: 0.001, warmupSteps: 100, totalSteps: 10000, beta1: 0.9, beta2: 0.999, epsilon: 1e-8, regularizationStrength: 1e-4, batchSize: 32, convergenceThreshold: 1e-6, outlierThreshold: 3.0, adwinDelta: 0.002
+DESIGN PRINCIPLES (HARD REQUIREMENTS)
+Full numerical stability throughout (stable softmax, epsilon guards, finite checks, variance floors).
+Object-oriented design with interfaces for public contracts; private field encapsulation for internal state.
+JSDoc on public methods and key classes (@param, @returns, @example).
+Inline math formula notes where it clarifies behavior (normalization, loss, Adam, softmax, layer norm).
+Full backpropagation across all layers (no partial training shortcuts).
 
-API:
-fitOnline({ xCoordinates: number[][], yCoordinates: number[][] }): FitResult → Incremental Adam, Welford's z-score, L2 reg, outlier downweighting, ADWIN drift detection
-fitBatch({ xCoordinates: number[][], yCoordinates: number[][], epochs?: number }): BatchFitResult → Mini-batch GD, shuffling, early stopping
-predict(futureSteps: number): PredictionResult → Predictions
-getModelSummary(): ModelSummary | getWeights(): WeightInfo | getNormalizationStats(): NormalizationStats | reset(): void
+PUBLIC API (MUST MATCH)
+fitOnline({ xCoordinates: number[][], yCoordinates: number[][] }): FitResult
+Behavior: incremental Adam update, Welford z-score, L2 regularization, outlier downweighting, ADWIN drift detection.
+predict(futureSteps: number): PredictionResult
+Behavior: forward-only inference with uncertainty bounds from ResidualStatsTracker.
+getModelSummary(): ModelSummary
+getWeights(): WeightInfo
+getNormalizationStats(): NormalizationStats
+reset(): void
+save(): string
+Behavior: JSON.stringify of all state data.
+load(w: string): void
+Behavior: restore all state data from JSON.
 
-TYPES:
+CONFIG DEFAULTS (MUST MATCH)
+numBlocks: 3
+embeddingDim: 64
+numHeads: 8
+ffnMultiplier: 4
+attentionDropout: 0.0
+learningRate: 0.001
+warmupSteps: 100
+totalSteps: 10000
+beta1: 0.9
+beta2: 0.999
+epsilon: 1e-8
+regularizationStrength: 1e-4
+convergenceThreshold: 1e-6
+outlierThreshold: 3.0
+adwinDelta: 0.002
+temporalScales: [1, 2, 4]
+temporalKernelSize: 3
+maxSequenceLength: 512
+fusionDropout: 0.0
+
+ARCHITECTURE OVERVIEW
+FusionTemporalTransformerRegression is the public facade and owns all state.
+Training step pipeline: validate shapes and caps, update normalizers, normalize input/target, forward pass, compute robust weighted loss, backward pass, clip gradients, schedule LR, Adam step, update residual stats, ADWIN drift update, optional drift strategy actions.
+Inference pipeline: forward pass on last normalized sequence, denormalize outputs, compute standard error and bounds, optional autoregressive rolling of the stored normalized sequence.
+
+CLASSES (MUST IMPLEMENT THESE EXACT NAMES AND ROLES)
+
+FusionTemporalTransformerRegression (PUBLIC FACADE)
+Owns all state and exposes fitOnline(), predict(), getModelSummary(), getWeights(), getNormalizationStats(), reset(), save(), load().
+Delegates to normalization, model graph, loss/backprop, optimizer, drift, metrics, serialization.
+Enforces shape contracts, deterministic caps, and typed-array-only hot paths.
+
+ModelCore (NETWORK ORCHESTRATOR)
+forward(seqXNorm: Float64Array, seqLen: number, inputDim: number): ForwardContext
+backward(ctx: ForwardContext, dLoss_dyPredNorm: Float64Array): void
+Composed of InputProjector, TemporalConvBank, CrossScaleFusion, TransformerStack, AttentionPooling, OutputHead.
+Never allocates in hot paths; all temporary tensors come from TensorArena and BufferPool.
+
+ParameterStore (WEIGHTS, GRADS, MOMENTS REGISTRY)
+Central registry of all trainable tensors and their optimizer moments.
+Holds W (params), G (grads), M and V (Adam moments) as contiguous Float64Array buffers.
+Provides deterministic parameter iteration order for optimizer and serialization.
+Exposes zero-copy TensorView slices (offset + shape metadata).
+
+TensorView (ZERO-COPY TENSOR ACCESSOR)
+Lightweight object describing a slice: data, offset, shape, strides.
+Used to pass around tensor regions without copying.
+Instances are pooled via ObjectPool<TensorView>.
+
+TensorArena / BufferPool / ObjectPool<T> (MEMORY MANAGEMENT)
+TensorArena: preallocates large Float64Array slabs for activations and fixed scratch regions (by purpose).
+BufferPool: rents/recycles scratch Float64Array by size class, returns immediately after use.
+ObjectPool<T>: pools small objects (TensorView, ForwardContext shells, ADWIN bucket nodes, etc.).
+
+MatrixOps (IN-PLACE NUMERICS KERNELS)
+Static in-place ops specialized for Float64Array: matmul, gemv, add, scale, axpy, dot, softmaxStable, layerNorm, gelu, sigmoid, clamp, globalNorm.
+Strict loops only; provide fused kernels (matmul+bias+activation, softmax+mask, residual+dropout).
+Numerical stability primitives (max-sub softmax, epsilon guards, finite masking).
+
+Initializer (STABLE PARAM INIT)
+xavierUniform(), heUniform(), smallUniform(), zeros(), ones().
+Deterministic seeding via DeterministicRNG.
+Applies init through ParameterStore without reflection or dynamic dispatch.
+
+DeterministicRNG (REPRODUCIBLE INIT AND DROPOUT)
+nextU32(), nextFloat01().
+Used by Initializer and DropoutMaskGenerator.
+Optional stateless hashing (seed + step + tensorId) to avoid storing masks when feasible.
+
+OnlineNormalizer (WELFORD Z-SCORE FOR INPUTS AND OUTPUTS)
+Maintains mean, m2, std, count per feature as Float64Array.
+updateX(seqXRaw: number[][]): void
+normalizeX(seqXRaw: number[][], out: Float64Array, seqLen: number, inputDim: number): void
+updateY(yRaw: number[]): void
+normalizeY(yRaw: number[], out: Float64Array, outputDim: number): void
+Denormalize helpers used by predict().
+Apply std floors consistently to avoid explosions.
+
+ResidualStatsTracker (UNCERTAINTY AND ACCURACY STREAM)
+Welford residual variance per output in normalized space.
+updateResidual(rNormVec: Float64Array): void
+Tracks running loss (mean or EMA) and derives bounded accuracy = 1 / (1 + avgLoss).
+Computes standard error and prediction intervals for predict().
+
+OutlierWeighter (ROBUST ONLINE WEIGHTING)
+computeWeight(residualNorm: number, outlierThreshold: number): { isOutlier: boolean, weight: number }
+Weight scales only the data-loss gradient (MSE path), not L2, unless explicitly configured.
+
+LossComputer (MSE AND REGULARIZATION)
+mse(yTargetNorm: Float64Array, yPredNorm: Float64Array): number
+l2(params: ParameterStore, regularizationStrength: number): number
+dMse_dyPredNorm(yTargetNorm: Float64Array, yPredNorm: Float64Array, outGrad: Float64Array): void
+Support exactly one global policy: either L2-in-loss or decoupled AdamW style weight decay, consistently.
+
+GradientClipper (GLOBAL NORM CLIP)
+clip(params: ParameterStore, clipThreshold: number): number
+Computes stable global norm and scales grads in-place if needed.
+
+LRScheduler (WARMUP AND COSINE DECAY)
+getLR(step: number): number
+Pure function, no allocations, encapsulates warmupSteps, totalSteps, baseLR.
+
+AdamOptimizer (INCREMENTAL ADAM UPDATER)
+step(params: ParameterStore, lr: number, beta1: number, beta2: number, epsilon: number, weightDecayPolicy: number): void
+In-place updates, maintains updateCount and bias correction.
+Supports moment reset hooks used by drift policy.
+
+AdwinDetector (DRIFT DETECTION)
+update(errorValue: number): boolean
+Bucketed adaptive window with split checks; uses pooled bucket nodes.
+On drift: shrinks window, increments driftCount, triggers DriftStrategy actions via facade.
+
+DriftStrategy (DRIFT RESPONSE POLICY)
+onDrift(model: ModelCore, optimizer: AdamOptimizer, normalizer: OnlineNormalizer, scheduler: LRScheduler): void
+Default actions: reset optimizer moments, temporary LR reduction, optional normalization adjustments.
+
+ForwardContext (MINIMAL TRAINING TAPE)
+Holds only references and offsets into TensorArena needed for backprop.
+Includes (as offsets/views): E0, per-scale conv outputs, aligned scale buffers, fusion gates/stats, per-block LN stats, Q/K/V tile buffers, attention tile buffers, FFN activations, pooling weights, agg vector, yPredNorm.
+No deep object graphs; allocated once and reused as a mutable container.
+
+Layer Interfaces (INTERNAL CONTRACTS, LIGHTWEIGHT)
+ILayer: forward(in: TensorView, ctx: ForwardContext): TensorView; backward(dOut: TensorView, ctx: ForwardContext): TensorView
+ITrainableLayer: exposes parameter ids/slices in ParameterStore
+Avoid virtual calls in inner loops when possible (prefer direct method calls inside ModelCore).
+
+InputProjector
+Projects (seqLen,inputDim) to (seqLen,embeddingDim) using W_in and b_in; writes into arena.
+
+TemporalConvBank
+Multi-scale causal/same convs over E0 using per-scale convolution weights and temporalKernelSize.
+Adds positional encodings and scale embeddings, applies GELU in-place.
+Aligns different temporal scales into a common timeline buffer (internal helper, not a new public class).
+
+PositionalEncodingCache
+Precomputes positional encodings once per (scale,length) up to maxSequenceLength; stored in cache.
+Provides zero-copy views, no recomputation.
+
+CrossScaleFusion
+Computes per-scale gates (sigmoid or softmax across scales) and fused embedding sequence.
+Stores gate logits/weights in ForwardContext for backprop.
+
+TransformerStack
+Holds numBlocks TransformerBlock instances.
+Runs pre-LN residual MHA + FFN for each block, reusing arena scratch and fixed attention tiling buffers.
+
+TransformerBlock
+LayerNorm1 -> MultiHeadSelfAttention -> Residual -> LayerNorm2 -> FeedForward -> Residual (optional dropout).
+Caches minimal LN stats and attention/FFN intermediates required for backward.
+
+LayerNorm
+In-place LN forward/backward with gamma/beta parameters and stable epsilon.
+
+MultiHeadSelfAttention
+Projects Q/K/V, applies causal mask, stable softmax, computes head outputs and final projection.
+Supports RelPosBias in score computation.
+Must use streaming/tiled attention with fixed buffers (tileQ x tileK) allocated once; no full score/weight matrices.
+
+RelPosBias
+Stores learnable relative position bias table or computed bias; fast lookup by (i-j) index.
+
+FeedForward
+Two linear layers with GELU, hiddenDim = embeddingDim * ffnMultiplier.
+Uses fused kernels and minimal caching for backward.
+
+DropoutMaskGenerator (OPTIONAL, DETERMINISTIC)
+Generates dropout masks into preallocated buffers using DeterministicRNG and step index.
+If dropout is 0.0, it must be fully bypassed with near-zero overhead.
+
+AttentionPooling
+Computes pooling logits and weights over time, produces agg vector.
+Stores pooling weights/logits in ForwardContext for backward.
+
+OutputHead
+Linear head mapping agg vector to yPredNorm using W_out and b_out.
+Predict path denormalizes using OnlineNormalizer.
+
+ModelMetrics (SUMMARY AND READBACK)
+Builds ModelSummary (initialized, dims, param count, sampleCount, accuracy, converged, effectiveLR, driftCount).
+Provides getWeights() and getNormalizationStats() views without copying when safe; otherwise copies only on request.
+
+ModelSerializer (SAVE AND LOAD)
+save(state): string serializes config, tensors, normalizer stats, metrics, optimizer step, drift state.
+load(json): void validates shapes and restores into existing buffers when possible; if mismatch, rebuilds deterministically.
+Stable schema versioning and compatibility hooks.
+
+TYPES (MUST MATCH)
 FitResult { loss, gradientNorm, effectiveLearningRate, isOutlier, converged, sampleIndex, driftDetected }
-BatchFitResult { finalLoss, lossHistory: number[], converged, epochsCompleted, totalSamplesProcessed }
 PredictionResult { predictions: SinglePrediction[], accuracy, sampleCount, isModelReady }
 SinglePrediction { predicted, lowerBound, upperBound, standardError: number[] }
-WeightInfo { kernels, biases, firstMoment, secondMoment: number[][][], updateCount }
+WeightInfo { temporalConvWeights, scaleEmbeddings, positionalEncoding, fusionWeights, attentionWeights, ffnWeights, layerNormParams, outputWeights, firstMoment, secondMoment: number[][][], updateCount }
 NormalizationStats { inputMean, inputStd, outputMean, outputStd: number[], count }
-ModelSummary { isInitialized, inputDimension, outputDimension, hiddenLayers, convolutionsPerLayer, kernelSize, totalParameters, sampleCount, accuracy, converged, effectiveLearningRate, driftCount }
+ModelSummary { isInitialized, inputDimension, outputDimension, numBlocks, embeddingDim, numHeads, temporalScales, totalParameters, sampleCount, accuracy, converged, effectiveLearningRate, driftCount }
 
-ALGORITHMS:
+PSEUDOCODE (IMPLEMENTATION PLAN)
 
-Convolutional Network Architecture:
-1. Auto-detect: inputDim = xCoordinates[0].length, outputDim = yCoordinates[0].length
-2. Structure: Input(inputDim) → [Conv1D(convolutionsPerLayer, kernelSize, padding='same') → Activation]×hiddenLayers → Flatten → Dense(outputDim)
-3. Conv1D: y[c,i] = Σₖ Σⱼ(W[c,k,j] · x[k,i+j-pad]) + b[c], same padding preserves spatial dims
-4. Activation: ReLU(x) = max(0, x), applied element-wise
+Initialization strategy
+Constructor stores merged config and creates subsystem objects without allocating large slabs.
+ensureInitialized(seqLen, inputDim, outputDim) runs once:
+Allocate ParameterStore.W/G/M/V as contiguous Float64Array buffers with deterministic sizes derived from config and dims.
+Create and pool TensorView slices for every tensor region.
+Apply Initializer with DeterministicRNG.
+Configure TensorArena slabs based on maxSequenceLength, dims, embeddingDim, ffnMultiplier, numHeads, temporalScales, temporalKernelSize, and attention tiling parameters.
+Build ModelCore graph and bind layers to ParameterStore views and arena buffers.
+Allocate facade scratch vectors (outputDim): yTargetNorm, dLoss_dyPredNorm, residualNorm.
 
-Adam + Cosine Warmup:
-1. Normalize: x̃ = (x - μ)/(σ + ε)
-2. Forward: propagate through conv layers, cache activations for backprop
-3. Loss: L = (1/2n)Σ‖y - ŷ‖² + (λ/2)Σ‖W‖²
-4. Backprop: ∂L/∂W via chain rule, ∂Conv: rotate kernel, convolve with upstream gradient
-5. LR: warmup → cosine decay
-6. Update: m = β₁m + (1-β₁)g, v = β₂v + (1-β₂)g², W -= η(m/(1-β₁ᵗ))/(√(v/(1-β₂ᵗ)) + ε)
+fitOnline({ xCoordinates, yCoordinates }) flow
+Validate xCoordinates is [seqLen][inputDim].
+Select target row from yCoordinates: if length==1 use row 0 else use last row; outputDim = yRow.length.
+Apply deterministic caps: if seqLen > maxSequenceLength, truncate or stride to maxSequenceLength.
+ensureInitialized(seqLen, inputDim, outputDim).
+Update OnlineNormalizer with raw x and y.
+Normalize x into arena input buffer (Float64Array length seqLen*inputDim).
+Normalize y into scratch_yTargetNorm.
+Cache last normalized sequence for predict() using a single reusable buffer; copy with tight loops only.
+Forward pass: ctx = model.forward(seqXNorm, seqLen, inputDim); yPredNorm is a view stored in ctx.
+Compute residuals in normalized space; compute residual RMSE scalar; OutlierWeighter returns (isOutlier, wData).
+Compute dataLoss (MSE) and regLoss according to the chosen global policy; totalLoss = wData*dataLoss + regLoss.
+Seed gradient: dMse/dyPredNorm into scratch_dLoss_dyPredNorm, then scale by wData.
+Zero gradients in ParameterStore.G.
+Backward pass: model.backward(ctx, scratch_dLoss_dyPredNorm) fills grads in-place.
+Clip gradients by global norm via GradientClipper.
+Compute lr via LRScheduler.getLR(stepIndex).
+Apply AdamOptimizer.step in-place (with consistent weight decay policy).
+Update ResidualStatsTracker with residual vector and running loss; derive accuracy = 1/(1+avgLoss).
+Convergence detection uses convergenceThreshold on stable loss delta and/or gradNorm with hysteresis if needed.
+Drift detection: errorSignal = residualRMSE or totalLoss (choose one), driftDetected = AdwinDetector.update(errorSignal).
+If driftDetected, DriftStrategy.onDrift(...) applies configured responses (moment reset, LR reduction, optional normalizer actions).
+Increment stepIndex and sampleCount.
+Return FitResult with loss, gradientNorm, effectiveLearningRate, isOutlier, converged, sampleIndex, driftDetected.
 
-Welford: δ = x - μ, μ += δ/n, M₂ += δ(x - μ), σ² = M₂/(n-1) → inputs (normalize)
+ModelCore.forward(seqXNorm, seqLen, inputDim) outline
+InputProjector writes E0 (seqLen, embeddingDim) into arena.
+TemporalConvBank computes per-scale conv embeddings from E0, adds positional encodings and scale embeddings, GELU in-place.
+TemporalConvBank aligns scale outputs into common timeline buffers in arena.
+CrossScaleFusion computes gates and fused embedding Efused and records gate stats in ctx.
+TransformerStack runs numBlocks TransformerBlock forward passes using pre-LN residual structure.
+MultiHeadSelfAttention must compute attention via fixed tiling: iterate query blocks and key blocks, accumulate stable softmax in streaming form, store only minimal per-tile info needed for backward in ctx.
+AttentionPooling produces agg vector and stores pooling weights/logits.
+OutputHead produces yPredNorm view in arena and stores it in ctx.
+Return ctx.
 
-Accuracy: track running average loss L̄ = ΣLoss/n; accuracy = 1/(1 + L̄)
+ModelCore.backward(ctx, dLoss_dyPredNorm) outline
+Backprop through OutputHead to dAgg and parameter grads.
+Backprop through AttentionPooling to dH and pooling parameter grads.
+Backprop through TransformerStack blocks in reverse order, accumulating grads in ParameterStore.
+Backprop through CrossScaleFusion to aligned scale grads and fusion parameter grads.
+Backprop through TemporalConvBank per scale (including GELU and conv grads) and alignment reversal.
+Backprop through InputProjector to W_in/b_in grads.
+Do not allocate new buffers; reuse arena scratch and ctx offsets.
 
-ADWIN Drift: adaptive error window; detect drift when |μ₀ - μ₁| ≥ εcut(δ); shrink window; reset stats on drift
+predict(futureSteps) flow
+If not initialized or no cached last sequence, return empty predictions with isModelReady false.
+Determine isModelReady from sampleCount and normalizer validity.
+For each step in 0..futureSteps-1:
+Forward pass on lastSeqXNorm to get yPredNorm.
+Denormalize to predicted[].
+Compute standardError and bounds using ResidualStatsTracker variance and sampleCount, then scale to raw space using normalizer output std.
+Append SinglePrediction to results (allocations allowed only for returned objects).
+Optionally roll lastSeqXNorm in-place (shift left by one row); keep exogenous features constant unless config provides a mapping to inject predicted targets into input features.
+Return PredictionResult with predictions, accuracy, sampleCount, isModelReady.
 
-Outliers: r = (y - ŷ)/σ; |r| > threshold → downweight 0.1×
+getModelSummary(), getWeights(), getNormalizationStats()
+Return stable snapshots; avoid copying unless explicitly needed (slow path allowed only here).
 
-Export: ConvolutionalRegression
+reset()
+Reinitialize or reset weights deterministically, reset optimizer moments, normalizer stats, residual stats, drift detector, counters, and cached sequence.
+
+save() and load(w)
+save serializes config, dims, counters, normalizer state, residual stats, drift state, optimizer state, and ParameterStore buffers deterministically into JSON.
+load parses JSON, validates schema, ensures initialized with correct dims, restores into existing buffers when sizes match; if mismatch, rebuild ParameterStore and ModelCore deterministically, then restore; restore cached last sequence into a reusable buffer.
+
